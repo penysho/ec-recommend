@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"ec-recommend/internal/handler"
 	"encoding/json"
 	"fmt"
 
@@ -9,27 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
 
-// BedrockService defines the interface for Bedrock AI operations
-type BedrockService interface {
-	GenerateResponse(ctx context.Context, prompt string) (*AIResponse, error)
-}
-
 // BedrockClient wraps the AWS Bedrock runtime client
 type BedrockClient struct {
 	client  *bedrockruntime.Client
 	modelID string
-}
-
-// AIResponse represents the response from the AI model
-type AIResponse struct {
-	Content string `json:"content"`
-	Usage   Usage  `json:"usage,omitempty"`
-}
-
-// Usage represents token usage information
-type Usage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // ClaudeRequest represents the request structure for Claude models
@@ -61,46 +45,13 @@ type NovaContent struct {
 // ClaudeResponse represents the response structure from Claude models
 type ClaudeResponse struct {
 	Content []ContentBlock `json:"content"`
-	Usage   Usage          `json:"usage"`
+	Usage   handler.Usage  `json:"usage"`
 }
 
 // ContentBlock represents a content block in the response
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
-}
-
-// TitanRequest represents the request structure for Titan models
-type TitanRequest struct {
-	InputText            string             `json:"inputText"`
-	TextGenerationConfig TitanTextGenConfig `json:"textGenerationConfig"`
-}
-
-// TitanTextGenConfig represents text generation configuration for Titan
-type TitanTextGenConfig struct {
-	MaxTokenCount int      `json:"maxTokenCount"`
-	Temperature   float64  `json:"temperature,omitempty"`
-	TopP          float64  `json:"topP,omitempty"`
-	StopSequences []string `json:"stopSequences,omitempty"`
-}
-
-// TitanResponse represents the response structure from Titan models
-type TitanResponse struct {
-	Results             []TitanResult `json:"results"`
-	InputTextTokenCount int           `json:"inputTextTokenCount"`
-}
-
-// TitanResult represents a result from Titan
-type TitanResult struct {
-	TokenCount       int    `json:"tokenCount"`
-	OutputText       string `json:"outputText"`
-	CompletionReason string `json:"completionReason"`
-}
-
-// TitanUsage represents usage info from Titan
-type TitanUsage struct {
-	InputTextTokenCount int `json:"inputTextTokenCount"`
-	TotalTokenCount     int `json:"totalTokenCount"`
 }
 
 // NovaRequest represents the request structure for Nova models
@@ -143,7 +94,7 @@ func NewBedrockClient(client *bedrockruntime.Client, modelID string) *BedrockCli
 }
 
 // GenerateResponse generates a response using the specified model
-func (bc *BedrockClient) GenerateResponse(ctx context.Context, prompt string) (*AIResponse, error) {
+func (bc *BedrockClient) GenerateResponse(ctx context.Context, prompt string) (*handler.AIResponse, error) {
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt cannot be empty")
 	}
@@ -194,20 +145,6 @@ func (bc *BedrockClient) prepareRequest(prompt string) ([]byte, error) {
 		return json.Marshal(request)
 	}
 
-	// For Titan models
-	if bc.isTitanModel() {
-		request := TitanRequest{
-			InputText: prompt,
-			TextGenerationConfig: TitanTextGenConfig{
-				MaxTokenCount: 4096,
-				Temperature:   0.7,
-				TopP:          0.9,
-				StopSequences: []string{},
-			},
-		}
-		return json.Marshal(request)
-	}
-
 	// For Nova models
 	if bc.isNovaModel() {
 		request := NovaRequest{
@@ -232,7 +169,7 @@ func (bc *BedrockClient) prepareRequest(prompt string) ([]byte, error) {
 }
 
 // parseResponse parses the response body based on the model type
-func (bc *BedrockClient) parseResponse(body []byte) (*AIResponse, error) {
+func (bc *BedrockClient) parseResponse(body []byte) (*handler.AIResponse, error) {
 	// For Claude models
 	if bc.isClaudeModel() {
 		var claudeResp ClaudeResponse
@@ -244,29 +181,9 @@ func (bc *BedrockClient) parseResponse(body []byte) (*AIResponse, error) {
 			return nil, fmt.Errorf("no content in response")
 		}
 
-		return &AIResponse{
+		return &handler.AIResponse{
 			Content: claudeResp.Content[0].Text,
 			Usage:   claudeResp.Usage,
-		}, nil
-	}
-
-	// For Titan models
-	if bc.isTitanModel() {
-		var titanResp TitanResponse
-		if err := json.Unmarshal(body, &titanResp); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal Titan response: %w", err)
-		}
-
-		if len(titanResp.Results) == 0 {
-			return nil, fmt.Errorf("no results in Titan response")
-		}
-
-		return &AIResponse{
-			Content: titanResp.Results[0].OutputText,
-			Usage: Usage{
-				InputTokens:  titanResp.InputTextTokenCount,
-				OutputTokens: titanResp.Results[0].TokenCount,
-			},
 		}, nil
 	}
 
@@ -283,9 +200,9 @@ func (bc *BedrockClient) parseResponse(body []byte) (*AIResponse, error) {
 			content = novaResp.Output.Message.Content[0].Text
 		}
 
-		return &AIResponse{
+		return &handler.AIResponse{
 			Content: content,
-			Usage: Usage{
+			Usage: handler.Usage{
 				InputTokens:  novaResp.Usage.InputTokens,
 				OutputTokens: novaResp.Usage.OutputTokens,
 			},
@@ -298,15 +215,6 @@ func (bc *BedrockClient) parseResponse(body []byte) (*AIResponse, error) {
 // isClaudeModel checks if the current model is a Claude model
 func (bc *BedrockClient) isClaudeModel() bool {
 	return len(bc.modelID) > 10 && bc.modelID[:10] == "anthropic."
-}
-
-// isTitanModel checks if the current model is a Titan model
-func (bc *BedrockClient) isTitanModel() bool {
-	if len(bc.modelID) < 7 {
-		return false
-	}
-	return bc.modelID[:7] == "amazon." &&
-		(len(bc.modelID) > 12 && bc.modelID[7:12] == "titan")
 }
 
 // isNovaModel checks if the current model is a Nova model

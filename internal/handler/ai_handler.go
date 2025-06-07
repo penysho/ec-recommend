@@ -5,20 +5,19 @@ import (
 	"time"
 
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 // AIHandler handles AI-related HTTP requests
 type AIHandler struct {
-	bedrockService service.BedrockService
+	aiService AIServiceInterface
 }
 
 // NewAIHandler creates a new AI handler
-func NewAIHandler(bedrockService service.BedrockService) *AIHandler {
+func NewAIHandler(aiService AIServiceInterface) *AIHandler {
 	return &AIHandler{
-		bedrockService: bedrockService,
+		aiService: aiService,
 	}
 }
 
@@ -36,7 +35,7 @@ func (h *AIHandler) AskQuestion(c *gin.Context) {
 	}
 
 	// Generate AI response
-	aiResponse, err := h.bedrockService.GenerateResponse(c.Request.Context(), req.Question)
+	aiResponse, err := h.aiService.GenerateResponse(c.Request.Context(), req.Question)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
 			Error:     "Failed to generate AI response: " + err.Error(),
@@ -91,7 +90,7 @@ func (h *AIHandler) Chat(c *gin.Context) {
 	}
 
 	// Generate AI response
-	aiResponse, err := h.bedrockService.GenerateResponse(c.Request.Context(), lastUserMessage)
+	aiResponse, err := h.aiService.GenerateResponse(c.Request.Context(), lastUserMessage)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
 			Error:     "Failed to generate AI response: " + err.Error(),
