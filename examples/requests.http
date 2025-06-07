@@ -1,0 +1,60 @@
+### Health Check
+GET http://localhost:8080/health
+
+### Simple Question API
+POST http://localhost:8080/api/v1/ai/ask
+Content-Type: application/json
+
+{
+  "question": "GoでWebアプリケーションを作る際のベストプラクティスを教えてください。"
+}
+
+### Chat API
+POST http://localhost:8080/api/v1/ai/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "AWS Bedrockとは何ですか？"
+    }
+  ]
+}
+
+### Chat API with conversation history
+POST http://localhost:8080/api/v1/ai/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Goのgoroutineについて教えてください"
+    },
+    {
+      "role": "assistant",
+      "content": "Goroutineは、Goの軽量なスレッドです..."
+    },
+    {
+      "role": "user",
+      "content": "channelとの組み合わせで使う場合の注意点はありますか？"
+    }
+  ]
+}
+
+### Error case - empty question
+POST http://localhost:8080/api/v1/ai/ask
+Content-Type: application/json
+
+{
+  "question": ""
+}
+
+### Error case - invalid JSON
+POST http://localhost:8080/api/v1/ai/ask
+Content-Type: application/json
+
+{
+  "question":
+}
