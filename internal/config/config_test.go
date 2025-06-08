@@ -83,6 +83,11 @@ func TestValidate(t *testing.T) {
 	t.Run("valid configuration", func(t *testing.T) {
 		config := &Config{
 			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
 			AWSRegion:      "us-east-1",
 			BedrockModelID: "amazon.nova-lite-v1:0",
 			LogLevel:       "info",
@@ -97,6 +102,11 @@ func TestValidate(t *testing.T) {
 	t.Run("empty port", func(t *testing.T) {
 		config := &Config{
 			Port:           "",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
 			AWSRegion:      "us-east-1",
 			BedrockModelID: "anthropic.claude-3-haiku-20240307-v1:0",
 			LogLevel:       "info",
@@ -111,6 +121,11 @@ func TestValidate(t *testing.T) {
 	t.Run("empty AWS region", func(t *testing.T) {
 		config := &Config{
 			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
 			AWSRegion:      "",
 			BedrockModelID: "anthropic.claude-3-haiku-20240307-v1:0",
 			LogLevel:       "info",
@@ -125,6 +140,11 @@ func TestValidate(t *testing.T) {
 	t.Run("empty model ID", func(t *testing.T) {
 		config := &Config{
 			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
 			AWSRegion:      "us-east-1",
 			BedrockModelID: "",
 			LogLevel:       "info",
@@ -133,6 +153,82 @@ func TestValidate(t *testing.T) {
 		err := config.validate()
 		if err == nil {
 			t.Error("Expected error for empty model ID")
+		}
+	})
+
+	t.Run("empty database host", func(t *testing.T) {
+		config := &Config{
+			Port:           "8080",
+			DBHost:         "",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
+			AWSRegion:      "us-east-1",
+			BedrockModelID: "amazon.nova-lite-v1:0",
+			LogLevel:       "info",
+		}
+
+		err := config.validate()
+		if err == nil {
+			t.Error("Expected error for empty database host")
+		}
+	})
+
+	t.Run("empty database port", func(t *testing.T) {
+		config := &Config{
+			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
+			AWSRegion:      "us-east-1",
+			BedrockModelID: "amazon.nova-lite-v1:0",
+			LogLevel:       "info",
+		}
+
+		err := config.validate()
+		if err == nil {
+			t.Error("Expected error for empty database port")
+		}
+	})
+
+	t.Run("empty database user", func(t *testing.T) {
+		config := &Config{
+			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "",
+			DBPassword:     "postgres",
+			DBName:         "postgres",
+			AWSRegion:      "us-east-1",
+			BedrockModelID: "amazon.nova-lite-v1:0",
+			LogLevel:       "info",
+		}
+
+		err := config.validate()
+		if err == nil {
+			t.Error("Expected error for empty database user")
+		}
+	})
+
+	t.Run("empty database name", func(t *testing.T) {
+		config := &Config{
+			Port:           "8080",
+			DBHost:         "localhost",
+			DBPort:         "5436",
+			DBUser:         "postgres",
+			DBPassword:     "postgres",
+			DBName:         "",
+			AWSRegion:      "us-east-1",
+			BedrockModelID: "amazon.nova-lite-v1:0",
+			LogLevel:       "info",
+		}
+
+		err := config.validate()
+		if err == nil {
+			t.Error("Expected error for empty database name")
 		}
 	})
 }

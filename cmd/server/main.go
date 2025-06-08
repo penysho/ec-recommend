@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,11 +13,14 @@ import (
 
 	"ec-recommend/internal/config"
 	"ec-recommend/internal/handler"
+	"ec-recommend/internal/repository"
 	"ec-recommend/internal/router"
 	"ec-recommend/internal/service"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	_ "github.com/lib/pq"
+	"github.com/volatiletech/sqlboiler/v4/boil"
 )
 
 func main() {
@@ -33,18 +38,43 @@ func main() {
 		log.Fatalf("Failed to load AWS configuration: %v", err)
 	}
 
+	// Create database connection
+	dbConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
+
+	db, err := sql.Open("postgres", dbConnStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Test database connection
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to ping database: %v", err)
+	}
+
+	// Set the global database for SQLBoiler
+	boil.SetDB(db)
+
 	// Create Bedrock runtime client
 	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
 
 	// Initialize services
 	bedrockService := service.NewBedrockClient(bedrockClient, cfg.BedrockModelID)
 
+	// Initialize repositories
+	recommendationRepo := repository.NewRecommendationRepository(db)
+
+	// Initialize recommendation service
+	recommendationService := service.NewRecommendationService(recommendationRepo, bedrockService, cfg.BedrockModelID)
+
 	// Initialize handlers
 	aiHandler := handler.NewAIHandler(bedrockService)
 	healthHandler := handler.NewHealthHandler()
+	recommendationHandler := handler.NewRecommendationHandler(recommendationService)
 
 	// Setup router
-	routerEngine := router.SetupRouter(aiHandler, healthHandler)
+	routerEngine := router.SetupRouter(aiHandler, healthHandler, recommendationHandler)
 
 	// Create HTTP server
 	server := &http.Server{

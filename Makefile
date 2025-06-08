@@ -41,14 +41,21 @@ db-reset: db-down ## Reset database (drop, recreate, setup, seed)
 db-connect: ## Connect to database via psql
 	@docker exec -it ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME)
 
+# Code generation
+.PHONY: generate-models
+
+generate-models: ## Generate database models using sqlboiler
+	@echo "Generating database models..."
+	sqlboiler psql
+
 # Application operations
 .PHONY: build run test clean dev
 
 build: ## Build the application
-	go build -o ec-recommend cmd/main.go
+	go build -o ec-recommend cmd/server/main.go
 
 run: ## Run the application
-	go run cmd/main.go
+	go run cmd/server/main.go
 
 test: ## Run tests
 	go test -v ./...

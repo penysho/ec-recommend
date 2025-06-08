@@ -1,13 +1,4 @@
-package handler
-
-import (
-	"context"
-)
-
-// AIServiceInterface defines the interface for AI operations
-type AIServiceInterface interface {
-	GenerateResponse(ctx context.Context, prompt string) (*AIResponse, error)
-}
+package types
 
 // AIResponse represents the response from the AI model
 type AIResponse struct {

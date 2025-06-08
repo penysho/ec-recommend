@@ -5,17 +5,18 @@ import (
 	"time"
 
 	"ec-recommend/internal/dto"
+	"ec-recommend/internal/interfaces"
 
 	"github.com/gin-gonic/gin"
 )
 
 // AIHandler handles AI-related HTTP requests
 type AIHandler struct {
-	aiService AIServiceInterface
+	aiService interfaces.AIServiceInterface
 }
 
 // NewAIHandler creates a new AI handler
-func NewAIHandler(aiService AIServiceInterface) *AIHandler {
+func NewAIHandler(aiService interfaces.AIServiceInterface) *AIHandler {
 	return &AIHandler{
 		aiService: aiService,
 	}

@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"ec-recommend/internal/handler"
+	"ec-recommend/internal/types"
 	"encoding/json"
 	"fmt"
 
@@ -45,7 +45,7 @@ type NovaContent struct {
 // ClaudeResponse represents the response structure from Claude models
 type ClaudeResponse struct {
 	Content []ContentBlock `json:"content"`
-	Usage   handler.Usage  `json:"usage"`
+	Usage   types.Usage    `json:"usage"`
 }
 
 // ContentBlock represents a content block in the response
@@ -94,7 +94,7 @@ func NewBedrockClient(client *bedrockruntime.Client, modelID string) *BedrockCli
 }
 
 // GenerateResponse generates a response using the specified model
-func (bc *BedrockClient) GenerateResponse(ctx context.Context, prompt string) (*handler.AIResponse, error) {
+func (bc *BedrockClient) GenerateResponse(ctx context.Context, prompt string) (*types.AIResponse, error) {
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt cannot be empty")
 	}
@@ -169,7 +169,7 @@ func (bc *BedrockClient) prepareRequest(prompt string) ([]byte, error) {
 }
 
 // parseResponse parses the response body based on the model type
-func (bc *BedrockClient) parseResponse(body []byte) (*handler.AIResponse, error) {
+func (bc *BedrockClient) parseResponse(body []byte) (*types.AIResponse, error) {
 	// For Claude models
 	if bc.isClaudeModel() {
 		var claudeResp ClaudeResponse
@@ -181,7 +181,7 @@ func (bc *BedrockClient) parseResponse(body []byte) (*handler.AIResponse, error)
 			return nil, fmt.Errorf("no content in response")
 		}
 
-		return &handler.AIResponse{
+		return &types.AIResponse{
 			Content: claudeResp.Content[0].Text,
 			Usage:   claudeResp.Usage,
 		}, nil
@@ -200,9 +200,9 @@ func (bc *BedrockClient) parseResponse(body []byte) (*handler.AIResponse, error)
 			content = novaResp.Output.Message.Content[0].Text
 		}
 
-		return &handler.AIResponse{
+		return &types.AIResponse{
 			Content: content,
-			Usage: handler.Usage{
+			Usage: types.Usage{
 				InputTokens:  novaResp.Usage.InputTokens,
 				OutputTokens: novaResp.Usage.OutputTokens,
 			},
