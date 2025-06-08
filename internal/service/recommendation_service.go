@@ -88,6 +88,7 @@ func (rs *RecommendationService) GetRecommendations(ctx context.Context, req *dt
 		recommendations = recommendations[:req.Limit]
 	}
 
+	fmt.Println("recommendations", len(recommendations))
 	for _, rec := range recommendations {
 		fmt.Println(rec.Name)
 	}
@@ -97,10 +98,16 @@ func (rs *RecommendationService) GetRecommendations(ctx context.Context, req *dt
 	if err != nil {
 		// Log error but don't fail the request
 		fmt.Printf("Warning: failed to enhance recommendations with AI: %v\n", err)
+	} else {
+		// Sort recommendations by AI-enhanced confidence scores in descending order
+		sort.Slice(recommendations, func(i, j int) bool {
+			return recommendations[i].ConfidenceScore > recommendations[j].ConfidenceScore
+		})
 	}
 
+	fmt.Println("recommendations after AI enhancement and sorting", len(recommendations))
 	for _, rec := range recommendations {
-		fmt.Println(rec.Name)
+		fmt.Printf("%s (confidence: %.3f)\n", rec.Name, rec.ConfidenceScore)
 	}
 
 	// Log recommendation for analytics
@@ -440,17 +447,47 @@ Format: ["product-id-1", "product-id-2", ...]
 
 func (rs *RecommendationService) createEnhancementPrompt(recommendations []dto.ProductRecommendation, profile *dto.CustomerProfile, contextType string) string {
 	return fmt.Sprintf(`
-For each of the following product recommendations, provide a personalized explanation and confidence score (0.0-1.0) based on the customer profile and context.
+You are an advanced product recommendation AI. Analyze each product recommendation and provide personalized confidence scores and explanations based on comprehensive customer data.
 
-Customer Profile:
+## Customer Profile Analysis:
+**Financial Profile:**
 - Total Spent: %.2f
+- Order Count: %d
+- Average Order Value: %.2f
+- Is Premium Customer: %t
+- Price Range Preference: %s
+
+**Behavioral Profile:**
 - Preferred Categories: %v
+- Preferred Brands: %v
 - Lifestyle Tags: %v
 
-Context: %s
-
-Products to enhance:
+**Purchase Patterns:**
 %s
+
+**Recent Activity Patterns:**
+%s
+
+## Recommendation Context: %s
+
+## Products to Analyze:
+%s
+
+## Instructions:
+1. For each product, calculate a confidence score (0.0-1.0) based on:
+   - Purchase history alignment (30%%)
+   - Category/brand preferences (25%%)
+   - Price range compatibility (20%%)
+   - Lifestyle and behavioral fit (15%%)
+   - Context appropriateness (10%%)
+
+2. Provide detailed reasoning considering:
+   - Why this product matches their buying patterns
+   - How it fits their lifestyle and preferences
+   - Timing and context relevance
+   - Potential value and satisfaction
+
+3. Rank products by recommendation priority and provide nuanced confidence scores.
 
 Please provide a JSON response with the following format:
 {
@@ -458,16 +495,23 @@ Please provide a JSON response with the following format:
     {
       "product_id": "uuid",
       "confidence_score": 0.85,
-      "reason": "Personalized explanation for why this product is recommended"
+      "reason": "Detailed personalized explanation including purchase pattern analysis, lifestyle fit, and value proposition"
     }
   ]
 }
 `,
 		profile.TotalSpent,
+		profile.OrderCount,
+		rs.calculateAverageOrderValue(profile),
+		profile.IsPremium,
+		rs.formatPriceRangePreference(profile),
 		profile.PreferredCategories,
+		profile.PreferredBrands,
 		profile.LifestyleTags,
+		rs.formatDetailedPurchaseHistory(profile.PurchaseHistory),
+		rs.formatRecentActivities(profile.RecentActivities),
 		contextType,
-		rs.formatRecommendationsForAI(recommendations),
+		rs.formatEnhancedRecommendationsForAI(recommendations),
 	)
 }
 
@@ -496,6 +540,157 @@ func (rs *RecommendationService) formatRecommendationsForAI(recommendations []dt
 	for _, rec := range recommendations {
 		result += fmt.Sprintf("- ID: %s, Name: %s, Category: %d, Price: %.2f, Rating: %.1f\n",
 			rec.ProductID.String(), rec.Name, rec.CategoryID, rec.Price, rec.RatingAverage)
+	}
+	return result
+}
+
+// calculateAverageOrderValue calculates the average order value for a customer
+func (rs *RecommendationService) calculateAverageOrderValue(profile *dto.CustomerProfile) float64 {
+	if profile.OrderCount == 0 {
+		return 0.0
+	}
+	return profile.TotalSpent / float64(profile.OrderCount)
+}
+
+// formatPriceRangePreference formats the customer's price range preference
+func (rs *RecommendationService) formatPriceRangePreference(profile *dto.CustomerProfile) string {
+	if profile.PriceRangeMin != nil && profile.PriceRangeMax != nil {
+		return fmt.Sprintf("%.2f - %.2f", *profile.PriceRangeMin, *profile.PriceRangeMax)
+	} else if profile.PriceRangeMin != nil {
+		return fmt.Sprintf("Above %.2f", *profile.PriceRangeMin)
+	} else if profile.PriceRangeMax != nil {
+		return fmt.Sprintf("Below %.2f", *profile.PriceRangeMax)
+	}
+	return "No specific preference"
+}
+
+// formatDetailedPurchaseHistory provides detailed analysis of purchase history
+func (rs *RecommendationService) formatDetailedPurchaseHistory(history []dto.PurchaseItem) string {
+	if len(history) == 0 {
+		return "No purchase history available"
+	}
+
+	result := "Recent Purchase Analysis:\n"
+
+	// Analyze recent purchases (last 10)
+	limit := 10
+	if len(history) < limit {
+		limit = len(history)
+	}
+
+	categoryCount := make(map[int]int)
+	totalValue := 0.0
+	var recentPurchases []string
+
+	for i := 0; i < limit; i++ {
+		item := history[i]
+		categoryCount[item.CategoryID]++
+		totalValue += item.Price
+
+		daysSince := int(time.Since(item.PurchasedAt).Hours() / 24)
+		recentPurchases = append(recentPurchases,
+			fmt.Sprintf("  - Category %d, Price: %.2f, %d days ago",
+				item.CategoryID, item.Price, daysSince))
+	}
+
+	// Add purchase pattern summary
+	result += fmt.Sprintf("- Total recent purchases: %d\n", limit)
+	result += fmt.Sprintf("- Recent purchase value: %.2f\n", totalValue)
+	result += fmt.Sprintf("- Average recent purchase: %.2f\n", totalValue/float64(limit))
+
+	// Add category distribution
+	result += "- Category frequency: "
+	for categoryID, count := range categoryCount {
+		result += fmt.Sprintf("Cat%d(%d) ", categoryID, count)
+	}
+	result += "\n"
+
+	// Add individual purchases
+	result += "Recent Purchases:\n"
+	for _, purchase := range recentPurchases {
+		result += purchase + "\n"
+	}
+
+	return result
+}
+
+// formatRecentActivities formats customer's recent activities
+func (rs *RecommendationService) formatRecentActivities(activities []dto.ActivityItem) string {
+	if len(activities) == 0 {
+		return "No recent activity data available"
+	}
+
+	result := "Recent Activity Analysis:\n"
+
+	limit := 10
+	if len(activities) < limit {
+		limit = len(activities)
+	}
+
+	activityTypes := make(map[string]int)
+	var recentActivities []string
+
+	for i := 0; i < limit; i++ {
+		activity := activities[i]
+		activityTypes[activity.ActivityType]++
+
+		daysSince := int(time.Since(activity.CreatedAt).Hours() / 24)
+		details := activity.SearchQuery
+		if activity.ProductID != nil {
+			details = fmt.Sprintf("Product: %s", activity.ProductID.String())
+		}
+		recentActivities = append(recentActivities,
+			fmt.Sprintf("  - %s: %s (%d days ago)",
+				activity.ActivityType, details, daysSince))
+	}
+
+	// Add activity summary
+	result += fmt.Sprintf("- Total recent activities: %d\n", limit)
+	result += "- Activity types: "
+	for activityType, count := range activityTypes {
+		result += fmt.Sprintf("%s(%d) ", activityType, count)
+	}
+	result += "\n"
+
+	// Add individual activities
+	result += "Recent Activities:\n"
+	for _, activity := range recentActivities {
+		result += activity + "\n"
+	}
+
+	return result
+}
+
+// formatEnhancedRecommendationsForAI provides detailed product information for AI analysis
+func (rs *RecommendationService) formatEnhancedRecommendationsForAI(recommendations []dto.ProductRecommendation) string {
+	if len(recommendations) == 0 {
+		return "No products to analyze"
+	}
+
+	result := "Product Analysis Data:\n"
+	for i, rec := range recommendations {
+		result += fmt.Sprintf(`
+Product %d:
+- ID: %s
+- Name: %s
+- Category: %d
+- Price: %.2f
+- Rating: %.1f (from %d reviews)
+- Tags: %v
+- Current Confidence: %.3f
+- Description: %s
+
+`,
+			i+1,
+			rec.ProductID.String(),
+			rec.Name,
+			rec.CategoryID,
+			rec.Price,
+			rec.RatingAverage,
+			rec.RatingCount,
+			rec.Tags,
+			rec.ConfidenceScore,
+			rec.Description)
 	}
 	return result
 }
