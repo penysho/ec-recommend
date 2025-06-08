@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -87,11 +88,19 @@ func (rs *RecommendationService) GetRecommendations(ctx context.Context, req *dt
 		recommendations = recommendations[:req.Limit]
 	}
 
+	for _, rec := range recommendations {
+		fmt.Println(rec.Name)
+	}
+
 	// Generate AI-powered explanations and confidence scores
 	recommendations, err = rs.enhanceWithAI(ctx, recommendations, profile, req.ContextType)
 	if err != nil {
 		// Log error but don't fail the request
 		fmt.Printf("Warning: failed to enhance recommendations with AI: %v\n", err)
+	}
+
+	for _, rec := range recommendations {
+		fmt.Println(rec.Name)
 	}
 
 	// Log recommendation for analytics
@@ -492,8 +501,11 @@ func (rs *RecommendationService) formatRecommendationsForAI(recommendations []dt
 }
 
 func (rs *RecommendationService) parseAIRecommendations(content string) ([]uuid.UUID, error) {
+	// Remove markdown code blocks if present
+	cleanContent := rs.cleanJSONFromMarkdown(content)
+
 	var productIDs []string
-	err := json.Unmarshal([]byte(content), &productIDs)
+	err := json.Unmarshal([]byte(cleanContent), &productIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse AI recommendations: %w", err)
 	}
@@ -511,6 +523,9 @@ func (rs *RecommendationService) parseAIRecommendations(content string) ([]uuid.
 }
 
 func (rs *RecommendationService) parseAIEnhancements(content string, recommendations []dto.ProductRecommendation) ([]dto.ProductRecommendation, error) {
+	// Remove markdown code blocks if present
+	cleanContent := rs.cleanJSONFromMarkdown(content)
+
 	var response struct {
 		Enhancements []struct {
 			ProductID       string  `json:"product_id"`
@@ -519,9 +534,9 @@ func (rs *RecommendationService) parseAIEnhancements(content string, recommendat
 		} `json:"enhancements"`
 	}
 
-	err := json.Unmarshal([]byte(content), &response)
+	err := json.Unmarshal([]byte(cleanContent), &response)
 	if err != nil {
-		return recommendations, err
+		return recommendations, fmt.Errorf("failed to parse AI enhancements JSON: %w", err)
 	}
 
 	// Create a map for quick lookup
@@ -550,4 +565,16 @@ func (rs *RecommendationService) parseAIEnhancements(content string, recommendat
 	}
 
 	return recommendations, nil
+}
+
+// cleanJSONFromMarkdown removes markdown code blocks from JSON content
+func (rs *RecommendationService) cleanJSONFromMarkdown(content string) string {
+	// Remove markdown code block markers
+	content = strings.ReplaceAll(content, "```json", "")
+	content = strings.ReplaceAll(content, "```", "")
+
+	// Trim whitespace
+	content = strings.TrimSpace(content)
+
+	return content
 }
