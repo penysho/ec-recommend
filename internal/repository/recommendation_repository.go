@@ -460,8 +460,10 @@ func (r *RecommendationRepository) convertToProductRecommendations(products mode
 			rec.Description = product.Description.String
 		}
 
-		if originalPrice, ok := product.OriginalPrice.Float64(); ok {
-			rec.OriginalPrice = &originalPrice
+		if !product.OriginalPrice.IsZero() {
+			if originalPrice, ok := product.OriginalPrice.Float64(); ok {
+				rec.OriginalPrice = &originalPrice
+			}
 		}
 
 		if product.Brand.Valid {

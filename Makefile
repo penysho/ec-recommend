@@ -27,7 +27,15 @@ db-setup: ## Create database schema
 
 db-seed: ## Seed the database with sample data
 	@echo "Seeding database with sample data..."
-	@docker exec -i ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME) < db/sample_data.sql
+	@echo "Applying 01_categories.sql..."
+	@docker exec -i ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME) < db/01_categories.sql
+	@echo "Generating customer data (1000 customers)..."
+	@docker exec -i ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME) < db/02_customers_extended.sql
+	@echo "Applying 03_products.sql..."
+	@docker exec -i ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME) < db/03_products.sql
+	@echo "Applying 04_others.sql..."
+	@docker exec -i ec_recommend-db psql -U $(DB_USER) -d $(DB_NAME) < db/04_others.sql
+	@echo "Database seeding completed!"
 
 db-reset: db-down ## Reset database (drop, recreate, setup, seed)
 	@echo "Resetting database..."
