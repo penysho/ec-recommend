@@ -14,17 +14,17 @@ import (
 
 // RecommendationService implements the RecommendationServiceInterface
 type RecommendationService struct {
-	repo      interfaces.RecommendationRepositoryInterface
-	aiService interfaces.AIServiceInterface
-	modelID   string
+	repo        interfaces.RecommendationRepositoryInterface
+	chatService interfaces.ChatServiceInterface
+	modelID     string
 }
 
 // NewRecommendationService creates a new recommendation service instance
-func NewRecommendationService(repo interfaces.RecommendationRepositoryInterface, aiService interfaces.AIServiceInterface, modelID string) *RecommendationService {
+func NewRecommendationService(repo interfaces.RecommendationRepositoryInterface, chatService interfaces.ChatServiceInterface, modelID string) *RecommendationService {
 	return &RecommendationService{
-		repo:      repo,
-		aiService: aiService,
-		modelID:   modelID,
+		repo:        repo,
+		chatService: chatService,
+		modelID:     modelID,
 	}
 }
 
@@ -193,14 +193,14 @@ func (rs *RecommendationService) GetPersonalizedRecommendations(ctx context.Cont
 	// Create AI prompt based on customer profile
 	prompt := rs.createPersonalizationPrompt(profile)
 
-	// Get AI response
-	aiResponse, err := rs.aiService.GenerateResponse(ctx, prompt)
+	// Get chat response
+	chatResponse, err := rs.chatService.GenerateResponse(ctx, prompt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AI response: %w", err)
+		return nil, fmt.Errorf("failed to get chat response: %w", err)
 	}
 
-	// Parse AI response to extract product recommendations
-	productIDs, err := rs.parseAIRecommendations(aiResponse.Content)
+	// Parse chat response to extract product recommendations
+	productIDs, err := rs.parseAIRecommendations(chatResponse.Content)
 	if err != nil {
 		// Fallback to content-based recommendations
 		return rs.getContentBasedRecommendations(ctx, profile, limit)
@@ -328,14 +328,14 @@ func (rs *RecommendationService) enhanceWithAI(ctx context.Context, recommendati
 	// Create prompt for AI enhancement
 	prompt := rs.createEnhancementPrompt(recommendations, profile, contextType)
 
-	// Get AI response
-	aiResponse, err := rs.aiService.GenerateResponse(ctx, prompt)
+	// Get chat response
+	chatResponse, err := rs.chatService.GenerateResponse(ctx, prompt)
 	if err != nil {
 		return recommendations, err
 	}
 
-	// Parse AI response and enhance recommendations
-	enhanced, err := rs.parseAIEnhancements(aiResponse.Content, recommendations)
+	// Parse chat response and enhance recommendations
+	enhanced, err := rs.parseAIEnhancements(chatResponse.Content, recommendations)
 	if err != nil {
 		return recommendations, err
 	}

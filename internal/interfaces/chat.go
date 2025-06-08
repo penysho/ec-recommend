@@ -5,7 +5,7 @@ import (
 	"ec-recommend/internal/types"
 )
 
-// AIServiceInterface defines the interface for AI operations
-type AIServiceInterface interface {
+// ChatServiceInterface defines the interface for chat operations
+type ChatServiceInterface interface {
 	GenerateResponse(ctx context.Context, prompt string) (*types.AIResponse, error)
 }

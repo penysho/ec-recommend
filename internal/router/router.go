@@ -8,7 +8,7 @@ import (
 )
 
 // SetupRouter configures and returns the HTTP router
-func SetupRouter(aiHandler *handler.AIHandler, healthHandler *handler.HealthHandler, recommendationHandler *handler.RecommendationHandler) *gin.Engine {
+func SetupRouter(chatHandler *handler.ChatHandler, healthHandler *handler.HealthHandler, recommendationHandler *handler.RecommendationHandler) *gin.Engine {
 	// Set Gin mode based on environment
 	gin.SetMode(gin.ReleaseMode)
 
@@ -25,11 +25,11 @@ func SetupRouter(aiHandler *handler.AIHandler, healthHandler *handler.HealthHand
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// AI endpoints
-		ai := v1.Group("/ai")
+		// Chat endpoints
+		chat := v1.Group("/chat")
 		{
-			ai.POST("/ask", aiHandler.AskQuestion)
-			ai.POST("/chat", aiHandler.Chat)
+			chat.POST("/ask", chatHandler.AskQuestion)
+			chat.POST("/messages", chatHandler.Chat)
 		}
 
 		// Recommendation endpoints

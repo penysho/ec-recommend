@@ -2,20 +2,6 @@ package dto
 
 import "time"
 
-// QuestionResponse represents the response structure for question answers
-type QuestionResponse struct {
-	Answer    string    `json:"answer"`
-	Usage     UsageInfo `json:"usage,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// ChatResponse represents the response structure for chat conversations
-type ChatResponse struct {
-	Message   string    `json:"message"`
-	Usage     UsageInfo `json:"usage,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
 // UsageInfo represents token usage information
 type UsageInfo struct {
 	InputTokens  int `json:"input_tokens,omitempty"`

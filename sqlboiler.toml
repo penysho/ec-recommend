@@ -1,5 +1,5 @@
 pkgname = "models"
-output  = "internal/models"
+output  = "internal/repository/models"
 no-tests = true
 
 [psql]

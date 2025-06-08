@@ -10,20 +10,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// AIHandler handles AI-related HTTP requests
-type AIHandler struct {
-	aiService interfaces.AIServiceInterface
+// ChatHandler handles chat-related HTTP requests
+type ChatHandler struct {
+	chatService interfaces.ChatServiceInterface
 }
 
-// NewAIHandler creates a new AI handler
-func NewAIHandler(aiService interfaces.AIServiceInterface) *AIHandler {
-	return &AIHandler{
-		aiService: aiService,
+// NewChatHandler creates a new chat handler
+func NewChatHandler(chatService interfaces.ChatServiceInterface) *ChatHandler {
+	return &ChatHandler{
+		chatService: chatService,
 	}
 }
 
 // AskQuestion handles question-answer requests
-func (h *AIHandler) AskQuestion(c *gin.Context) {
+func (h *ChatHandler) AskQuestion(c *gin.Context) {
 	var req dto.QuestionRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -36,10 +36,10 @@ func (h *AIHandler) AskQuestion(c *gin.Context) {
 	}
 
 	// Generate AI response
-	aiResponse, err := h.aiService.GenerateResponse(c.Request.Context(), req.Question)
+	chatResponse, err := h.chatService.GenerateResponse(c.Request.Context(), req.Question)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error:     "Failed to generate AI response: " + err.Error(),
+			Error:     "Failed to generate chat response: " + err.Error(),
 			Code:      http.StatusInternalServerError,
 			Timestamp: time.Now(),
 		})
@@ -48,10 +48,10 @@ func (h *AIHandler) AskQuestion(c *gin.Context) {
 
 	// Create response
 	response := dto.QuestionResponse{
-		Answer: aiResponse.Content,
+		Answer: chatResponse.Content,
 		Usage: dto.UsageInfo{
-			InputTokens:  aiResponse.Usage.InputTokens,
-			OutputTokens: aiResponse.Usage.OutputTokens,
+			InputTokens:  chatResponse.Usage.InputTokens,
+			OutputTokens: chatResponse.Usage.OutputTokens,
 		},
 		Timestamp: time.Now(),
 	}
@@ -60,7 +60,7 @@ func (h *AIHandler) AskQuestion(c *gin.Context) {
 }
 
 // Chat handles chat conversation requests
-func (h *AIHandler) Chat(c *gin.Context) {
+func (h *ChatHandler) Chat(c *gin.Context) {
 	var req dto.ChatRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -91,10 +91,10 @@ func (h *AIHandler) Chat(c *gin.Context) {
 	}
 
 	// Generate AI response
-	aiResponse, err := h.aiService.GenerateResponse(c.Request.Context(), lastUserMessage)
+	chatResponse, err := h.chatService.GenerateResponse(c.Request.Context(), lastUserMessage)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error:     "Failed to generate AI response: " + err.Error(),
+			Error:     "Failed to generate chat response: " + err.Error(),
 			Code:      http.StatusInternalServerError,
 			Timestamp: time.Now(),
 		})
@@ -103,10 +103,10 @@ func (h *AIHandler) Chat(c *gin.Context) {
 
 	// Create response
 	response := dto.ChatResponse{
-		Message: aiResponse.Content,
+		Message: chatResponse.Content,
 		Usage: dto.UsageInfo{
-			InputTokens:  aiResponse.Usage.InputTokens,
-			OutputTokens: aiResponse.Usage.OutputTokens,
+			InputTokens:  chatResponse.Usage.InputTokens,
+			OutputTokens: chatResponse.Usage.OutputTokens,
 		},
 		Timestamp: time.Now(),
 	}

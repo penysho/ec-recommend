@@ -69,12 +69,12 @@ func main() {
 	recommendationService := service.NewRecommendationService(recommendationRepo, bedrockService, cfg.BedrockModelID)
 
 	// Initialize handlers
-	aiHandler := handler.NewAIHandler(bedrockService)
+	chatHandler := handler.NewChatHandler(bedrockService)
 	healthHandler := handler.NewHealthHandler()
 	recommendationHandler := handler.NewRecommendationHandler(recommendationService)
 
 	// Setup router
-	routerEngine := router.SetupRouter(aiHandler, healthHandler, recommendationHandler)
+	routerEngine := router.SetupRouter(chatHandler, healthHandler, recommendationHandler)
 
 	// Create HTTP server
 	server := &http.Server{
