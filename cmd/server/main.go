@@ -18,6 +18,7 @@ import (
 	"ec-recommend/internal/service"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	_ "github.com/lib/pq"
 	"github.com/volatiletech/sqlboiler/v4/boil"
@@ -56,25 +57,73 @@ func main() {
 	// Set the global database for SQLBoiler
 	boil.SetDB(db)
 
-	// Create Bedrock runtime client
+	// Create AWS service clients
 	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
+	bedrockAgentClient := bedrockagentruntime.NewFromConfig(awsCfg)
 
-	// Initialize services
+	// Initialize V1 services
 	bedrockService := service.NewBedrockClient(bedrockClient, cfg.BedrockModelID)
 
 	// Initialize repositories
 	recommendationRepo := repository.NewRecommendationRepository(db)
 
-	// Initialize recommendation service
+	// Initialize V1 recommendation service
 	recommendationService := service.NewRecommendationService(recommendationRepo, bedrockService, cfg.BedrockModelID)
+
+	// Initialize V2 services (Enhanced RAG-based)
+	var bedrockKnowledgeBaseService *service.BedrockKnowledgeBaseService
+	var openSearchVectorService *service.OpenSearchVectorService
+	var recommendationServiceV2 *service.RecommendationServiceV2
+
+	// Initialize Bedrock Knowledge Base service if configured
+	if cfg.KnowledgeBaseID != "" {
+		bedrockKnowledgeBaseService = service.NewBedrockKnowledgeBaseService(
+			bedrockAgentClient,
+			bedrockClient,
+			cfg.KnowledgeBaseID,
+			cfg.BedrockModelID,
+			cfg.EmbeddingModelID,
+		)
+		log.Printf("Initialized Bedrock Knowledge Base service with ID: %s", cfg.KnowledgeBaseID)
+	} else {
+		log.Println("Warning: KNOWLEDGE_BASE_ID not configured, V2 Knowledge Base features will be limited")
+	}
+
+	// Initialize OpenSearch Vector service if configured
+	if cfg.OpenSearchEndpoint != "" {
+		// Use AWS credentials from the config
+		credentials := awsCfg.Credentials
+		openSearchVectorService = service.NewOpenSearchVectorService(
+			cfg.OpenSearchEndpoint,
+			cfg.AWSRegion,
+			credentials,
+		)
+		log.Printf("Initialized OpenSearch Vector service with endpoint: %s", cfg.OpenSearchEndpoint)
+	} else {
+		log.Println("Warning: OPENSEARCH_ENDPOINT not configured, V2 vector search features will be limited")
+	}
+
+	// Initialize V2 recommendation service
+	// Note: Temporarily passing nil for V2 repository - basic features will work with V1 repo fallback
+	// TODO: Implement full RecommendationRepositoryV2 with all required methods
+	recommendationServiceV2 = service.NewRecommendationServiceV2(
+		nil, // V2 repository not yet implemented
+		bedrockKnowledgeBaseService,
+		openSearchVectorService,
+		bedrockService,
+		cfg.BedrockModelID,
+		cfg.KnowledgeBaseID,
+		cfg.EmbeddingModelID,
+	)
 
 	// Initialize handlers
 	chatHandler := handler.NewChatHandler(bedrockService)
 	healthHandler := handler.NewHealthHandler()
 	recommendationHandler := handler.NewRecommendationHandler(recommendationService)
+	recommendationHandlerV2 := handler.NewRecommendationHandlerV2(recommendationServiceV2)
 
 	// Setup router
-	routerEngine := router.SetupRouter(chatHandler, healthHandler, recommendationHandler)
+	routerEngine := router.SetupRouter(chatHandler, healthHandler, recommendationHandler, recommendationHandlerV2)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -87,6 +136,20 @@ func main() {
 		log.Printf("Starting server on port %s", cfg.Port)
 		log.Printf("Using AWS region: %s", cfg.AWSRegion)
 		log.Printf("Using Bedrock model: %s", cfg.BedrockModelID)
+		log.Printf("Using embedding model: %s", cfg.EmbeddingModelID)
+
+		// Log V2 feature availability
+		if cfg.KnowledgeBaseID != "" {
+			log.Printf("V2 Knowledge Base features enabled with ID: %s", cfg.KnowledgeBaseID)
+		}
+		if cfg.OpenSearchEndpoint != "" {
+			log.Printf("V2 Vector search features enabled with OpenSearch")
+		}
+
+		log.Println("Available endpoints:")
+		log.Println("  V1 API: /api/v1/recommendations")
+		log.Println("  V2 API: /api/v2/recommendations (Enhanced RAG-based)")
+		log.Println("  Health: /health")
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)

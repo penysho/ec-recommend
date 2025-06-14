@@ -8,7 +8,12 @@ import (
 )
 
 // SetupRouter configures and returns the HTTP router
-func SetupRouter(chatHandler *handler.ChatHandler, healthHandler *handler.HealthHandler, recommendationHandler *handler.RecommendationHandler) *gin.Engine {
+func SetupRouter(
+	chatHandler *handler.ChatHandler,
+	healthHandler *handler.HealthHandler,
+	recommendationHandler *handler.RecommendationHandler,
+	recommendationHandlerV2 *handler.RecommendationHandlerV2,
+) *gin.Engine {
 	// Set Gin mode based on environment
 	gin.SetMode(gin.ReleaseMode)
 
@@ -32,7 +37,7 @@ func SetupRouter(chatHandler *handler.ChatHandler, healthHandler *handler.Health
 			chat.POST("/messages", chatHandler.Chat)
 		}
 
-		// Recommendation endpoints
+		// Recommendation endpoints (V1)
 		recommendations := v1.Group("/recommendations")
 		{
 			recommendations.GET("", recommendationHandler.GetRecommendations)
@@ -51,6 +56,27 @@ func SetupRouter(chatHandler *handler.ChatHandler, healthHandler *handler.Health
 		{
 			products.GET("/trending", recommendationHandler.GetTrendingProducts)
 			products.GET("/:product_id/similar", recommendationHandler.GetSimilarProducts)
+		}
+	}
+
+	// API V2 routes - Enhanced RAG-based recommendations
+	v2 := router.Group("/api/v2")
+	{
+		// Enhanced recommendation endpoints with RAG capabilities
+		recommendations := v2.Group("/recommendations")
+		{
+			recommendations.GET("", recommendationHandlerV2.GetRecommendationsV2)
+			recommendations.POST("", recommendationHandlerV2.PostRecommendationsV2)
+			recommendations.GET("/semantic-search", recommendationHandlerV2.GetSemanticSearch)
+			recommendations.GET("/vector-similar", recommendationHandlerV2.GetVectorSimilarProducts)
+			recommendations.GET("/knowledge-based", recommendationHandlerV2.GetKnowledgeBasedRecommendations)
+			recommendations.GET("/:recommendation_id/explanation", recommendationHandlerV2.GetRecommendationExplanation)
+		}
+
+		// Enhanced product endpoints
+		products := v2.Group("/products")
+		{
+			products.GET("/trending", recommendationHandlerV2.GetTrendingProductsV2)
 		}
 	}
 

@@ -23,6 +23,16 @@ type Config struct {
 	// Bedrock configuration
 	BedrockModelID string `json:"bedrock_model_id"`
 
+	// Bedrock Knowledge Base configuration (for V2)
+	KnowledgeBaseID  string `json:"knowledge_base_id"`
+	EmbeddingModelID string `json:"embedding_model_id"`
+
+	// OpenSearch configuration (for V2)
+	OpenSearchEndpoint  string `json:"opensearch_endpoint"`
+	OpenSearchUsername  string `json:"opensearch_username"`
+	OpenSearchPassword  string `json:"opensearch_password"`
+	OpenSearchIndexName string `json:"opensearch_index_name"`
+
 	// Logging configuration
 	LogLevel string `json:"log_level"`
 }
@@ -38,7 +48,18 @@ func Load() (*Config, error) {
 		DBName:         getEnvWithDefault("DB_NAME", "postgres"),
 		AWSRegion:      getEnvWithDefault("AWS_REGION", "ap-northeast-1"),
 		BedrockModelID: getEnvWithDefault("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0"),
-		LogLevel:       getEnvWithDefault("LOG_LEVEL", "info"),
+
+		// Bedrock Knowledge Base configuration
+		KnowledgeBaseID:  getEnvWithDefault("KNOWLEDGE_BASE_ID", ""),
+		EmbeddingModelID: getEnvWithDefault("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v1"),
+
+		// OpenSearch configuration
+		OpenSearchEndpoint:  getEnvWithDefault("OPENSEARCH_ENDPOINT", ""),
+		OpenSearchUsername:  getEnvWithDefault("OPENSEARCH_USERNAME", ""),
+		OpenSearchPassword:  getEnvWithDefault("OPENSEARCH_PASSWORD", ""),
+		OpenSearchIndexName: getEnvWithDefault("OPENSEARCH_INDEX_NAME", "product-vectors"),
+
+		LogLevel: getEnvWithDefault("LOG_LEVEL", "info"),
 	}
 
 	if err := config.validate(); err != nil {

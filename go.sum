@@ -19,6 +19,8 @@ github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3 h1:bIqFDwgGXXN1Kpp99pDOdKMTTb5d
 github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3/go.mod h1:H5O/EsxDWyU+LP/V8i5sm8cxoZgc2fdNR9bxlOFrQTo=
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.34 h1:ZNTqv4nIdE/DiBfUUfXcLZ/Spcuz+RjeziUtNJackkM=
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.34/go.mod h1:zf7Vcd1ViW7cPqYWEHLHJkS50X0JS2IKz9Cgaj6ugrs=
+github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.45.0 h1:LOvIWCSwUNP0SIxx8Zww6VNuLW5O7RbFB1VpztiwQAc=
+github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.45.0/go.mod h1:Kek1IWlEDT1bp8kO+soWZh37Cb13LppHUTbMiJunna0=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.30.0 h1:eMOwQ8ZZK+76+08RfxeaGUtRFN6wxmD1rvqovc2kq2w=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.30.0/go.mod h1:0b5Rq7rUvSQFYHI1UO0zFTV/S6j6DUyuykXA80C+YOI=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.3 h1:eAh2A4b5IzM/lum78bZ590jy36+d/aFLgKF/4Vd1xPE=
@@ -107,6 +109,8 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+github.com/opensearch-project/opensearch-go/v4 v4.4.0 h1:YzyQ1fbRdeJES+sFBrX19kdPIsLpYrFdK4S55l6HrWg=
+github.com/opensearch-project/opensearch-go/v4 v4.4.0/go.mod h1:EBLeL9YERzDoWmu5uEMLFndBfhgX3PyquFGYxMIvx5c=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=
