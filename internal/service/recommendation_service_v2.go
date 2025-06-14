@@ -449,7 +449,7 @@ func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.C
 	}
 
 	// Generate semantic insights
-	semanticInsights := rs.generateSemanticInsights(req.QueryText, results, queryUnderstanding)
+	semanticInsights := rs.generateSemanticInsights(results, queryUnderstanding)
 
 	metrics.VectorSearchTimeMs = time.Since(startTime).Milliseconds()
 
@@ -677,14 +677,14 @@ func (rs *RecommendationServiceV2) buildPersonalizedFilters(profile *dto.Custome
 	return filters
 }
 
-func (rs *RecommendationServiceV2) generateSemanticInsights(query string, results []dto.ProductRecommendationV2, understanding *dto.QueryUnderstanding) *dto.SemanticInsights {
+func (rs *RecommendationServiceV2) generateSemanticInsights(results []dto.ProductRecommendationV2, understanding *dto.QueryUnderstanding) *dto.SemanticInsights {
 	insights := &dto.SemanticInsights{
-		QueryIntent:     understanding.Intent,
 		ConfidenceLevel: 0.8,
 	}
 
 	// Extract entities from understanding
 	if understanding != nil {
+		insights.QueryIntent = understanding.Intent
 		insights.ExtractedEntities = understanding.Entities
 	}
 
@@ -768,11 +768,16 @@ Please provide detailed product recommendations that match this customer's prefe
 }
 
 func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Context, kbResponse *BedrockKnowledgeBaseResponse, profile *dto.CustomerProfile, limit int) ([]dto.ProductRecommendationV2, []dto.ReasoningStep, error) {
-	var recommendations []dto.ProductRecommendationV2
-	var reasoningChain []dto.ReasoningStep
+	recommendations := make([]dto.ProductRecommendationV2, 0)
+	reasoningChain := make([]dto.ReasoningStep, 0)
+	extractedProductIDs := make([]uuid.UUID, 0)
+
+	// Check if kbResponse and Results are valid
+	if kbResponse == nil || kbResponse.Results == nil {
+		return recommendations, reasoningChain, nil
+	}
 
 	// Parse knowledge base results and extract product recommendations
-	// This is a simplified implementation - in reality, you would have more sophisticated parsing
 	for i, result := range kbResponse.Results {
 		if i >= limit {
 			break
@@ -787,14 +792,61 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 		}
 		reasoningChain = append(reasoningChain, step)
 
-		// In a real implementation, you would extract actual product IDs from the KB content
-		// For now, we'll fallback to category-based recommendations
+		// Extract product IDs from KB content using AI analysis
+		extractedIDs := rs.extractProductIDsFromKBContent(ctx, result.Content)
+		if len(extractedIDs) > 0 {
+			extractedProductIDs = append(extractedProductIDs, extractedIDs...)
+		}
 	}
 
-	// Fallback to category-based recommendations if KB didn't return specific products
+	// If we extracted product IDs, enhance with full product details from repository
+	if len(extractedProductIDs) > 0 {
+		fullProducts, err := rs.repo.GetProductsByIDs(ctx, extractedProductIDs)
+		if err != nil {
+			log.Printf("Warning: failed to get full product details for KB recommendations: %v", err)
+		} else {
+			// Create recommendations from full product data with KB insights
+			for _, product := range fullProducts {
+				// Enhance product with KB-specific metadata
+				product.Reason = "Based on knowledge base analysis and recommendations"
+				product.ConfidenceScore = 0.8  // Default confidence from KB
+				product.SimilarityScore = 0.75 // Default similarity from KB
+
+				// Add KB source information if available
+				if len(kbResponse.Results) > 0 {
+					product.Reason = fmt.Sprintf("Based on knowledge base insights: %s",
+						kbResponse.Results[0].Content[:min(100, len(kbResponse.Results[0].Content))])
+				}
+
+				recommendations = append(recommendations, product)
+			}
+		}
+	}
+
+	// Fallback to semantic search using KB content if no specific products extracted
+	if len(recommendations) == 0 && len(kbResponse.Results) > 0 {
+		// Use the first KB result as a search query (extract key terms)
+		searchQuery := rs.extractKeyTermsFromText(kbResponse.Results[0].Content)
+		if searchQuery != "" {
+			filters := rs.buildPersonalizedFilters(profile, &dto.RecommendationRequestV2{})
+			semanticResults, err := rs.repo.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
+			if err == nil {
+				// Enhance semantic results with KB reasoning
+				for _, product := range semanticResults {
+					product.Reason = fmt.Sprintf("Based on knowledge base insights: %s", searchQuery)
+					recommendations = append(recommendations, product)
+				}
+			}
+		}
+	}
+
+	// Final fallback to category-based recommendations
 	if len(recommendations) == 0 && len(profile.PreferredCategories) > 0 {
 		categoryProducts, err := rs.repo.GetProductsByCategory(ctx, profile.PreferredCategories[0], limit)
 		if err == nil {
+			for i := range categoryProducts {
+				categoryProducts[i].Reason = "Based on your preferred categories and knowledge base analysis"
+			}
 			recommendations = categoryProducts
 		}
 	}
@@ -1092,4 +1144,193 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// extractProductIDsFromKBContent extracts product IDs from knowledge base content using AI analysis
+func (rs *RecommendationServiceV2) extractProductIDsFromKBContent(ctx context.Context, content string) []uuid.UUID {
+	// Create AI prompt to extract product IDs from KB content
+	prompt := fmt.Sprintf(`
+Extract product IDs from the following knowledge base content.
+Look for any product identifiers, UUIDs, or product references.
+
+Content: %s
+
+IMPORTANT: Return ONLY a valid JSON array of strings without any markdown formatting, code blocks, or explanatory text.
+Example: ["uuid1", "uuid2", "uuid3"]
+If no valid product IDs are found, return: []
+`, content)
+
+	// Use chat service to analyze content
+	chatResponse, err := rs.chatService.GenerateResponse(ctx, prompt)
+	if err != nil {
+		log.Printf("Warning: failed to extract product IDs from KB content: %v", err)
+		return []uuid.UUID{}
+	}
+
+	// Clean the response by removing markdown code blocks if present
+	responseContent := rs.extractJSONFromMarkdown(chatResponse.Content)
+
+	// Parse the response to extract UUIDs
+	var productIDStrings []string
+	err = json.Unmarshal([]byte(responseContent), &productIDStrings)
+	if err != nil {
+		log.Printf("Warning: failed to parse extracted product IDs: %v", err)
+		log.Printf("Raw response content: %s", chatResponse.Content)
+
+		// Fallback: try to extract UUIDs using regex pattern matching
+		productIDs := rs.extractUUIDsWithRegex(chatResponse.Content)
+		if len(productIDs) > 0 {
+			log.Printf("Successfully extracted %d UUIDs using regex fallback", len(productIDs))
+			return productIDs
+		}
+
+		return []uuid.UUID{}
+	}
+
+	// Convert strings to UUIDs
+	var productIDs []uuid.UUID
+	for _, idStr := range productIDStrings {
+		if id, err := uuid.Parse(idStr); err == nil {
+			productIDs = append(productIDs, id)
+		}
+	}
+
+	return productIDs
+}
+
+// extractKeyTermsFromText extracts key terms from text for semantic search
+func (rs *RecommendationServiceV2) extractKeyTermsFromText(text string) string {
+	// Simple implementation: extract meaningful words
+	words := strings.Fields(strings.ToLower(text))
+	var keyTerms []string
+
+	// Filter out common stop words and keep meaningful terms
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "is": true, "are": true, "was": true, "were": true,
+		"be": true, "been": true, "being": true, "have": true, "has": true, "had": true,
+		"do": true, "does": true, "did": true, "will": true, "would": true, "could": true,
+		"should": true, "may": true, "might": true, "must": true, "can": true,
+		"this": true, "that": true, "these": true, "those": true, "i": true, "you": true,
+		"he": true, "she": true, "it": true, "we": true, "they": true, "me": true,
+		"him": true, "her": true, "us": true, "them": true,
+	}
+
+	for _, word := range words {
+		// Remove punctuation and keep only alphanumeric characters
+		cleanWord := strings.Trim(word, ".,!?;:\"'()[]{}+-=_*&^%$#@~`")
+		if len(cleanWord) > 3 && !stopWords[cleanWord] {
+			keyTerms = append(keyTerms, cleanWord)
+		}
+	}
+
+	// Return top 5 key terms joined with spaces
+	if len(keyTerms) > 5 {
+		keyTerms = keyTerms[:5]
+	}
+
+	return strings.Join(keyTerms, " ")
+}
+
+// extractJSONFromMarkdown extracts JSON content from markdown code blocks
+func (rs *RecommendationServiceV2) extractJSONFromMarkdown(content string) string {
+	// Remove leading/trailing whitespace
+	content = strings.TrimSpace(content)
+
+	// Check if content is wrapped in markdown code blocks
+	if strings.HasPrefix(content, "```json") {
+		// Extract content between ```json and ```
+		lines := strings.Split(content, "\n")
+		var jsonLines []string
+		inCodeBlock := false
+
+		for _, line := range lines {
+			if strings.HasPrefix(line, "```json") {
+				inCodeBlock = true
+				continue
+			}
+			if strings.HasPrefix(line, "```") && inCodeBlock {
+				break
+			}
+			if inCodeBlock {
+				jsonLines = append(jsonLines, line)
+			}
+		}
+
+		return strings.Join(jsonLines, "\n")
+	}
+
+	// Check if content is wrapped in simple code blocks
+	if strings.HasPrefix(content, "```") {
+		// Extract content between ``` and ```
+		lines := strings.Split(content, "\n")
+		var jsonLines []string
+		inCodeBlock := false
+
+		for _, line := range lines {
+			if strings.HasPrefix(line, "```") && !inCodeBlock {
+				inCodeBlock = true
+				continue
+			}
+			if strings.HasPrefix(line, "```") && inCodeBlock {
+				break
+			}
+			if inCodeBlock {
+				jsonLines = append(jsonLines, line)
+			}
+		}
+
+		return strings.Join(jsonLines, "\n")
+	}
+
+	// Try to find JSON array pattern in the content
+	startIndex := strings.Index(content, "[")
+	endIndex := strings.LastIndex(content, "]")
+
+	if startIndex != -1 && endIndex != -1 && endIndex > startIndex {
+		return content[startIndex : endIndex+1]
+	}
+
+	// Return original content if no markdown formatting found
+	return content
+}
+
+// extractUUIDsWithRegex extracts UUIDs from text using regex pattern matching
+func (rs *RecommendationServiceV2) extractUUIDsWithRegex(content string) []uuid.UUID {
+	// Find all UUID matches in the content
+	matches := make(map[string]bool) // Use map to avoid duplicates
+
+	// Split content into words and check each word
+	words := strings.Fields(content)
+	for _, word := range words {
+		// Clean the word by removing common punctuation
+		cleanWord := strings.Trim(word, ".,!?;:\"'()[]{}+-=_*&^%$#@~`")
+
+		// Try to parse as UUID
+		if _, err := uuid.Parse(cleanWord); err == nil {
+			matches[cleanWord] = true
+		}
+	}
+
+	// Also check for UUIDs in quoted strings
+	if strings.Contains(content, `"`) {
+		// Extract quoted UUIDs
+		parts := strings.Split(content, `"`)
+		for i := 1; i < len(parts); i += 2 { // Check every odd index (quoted content)
+			if _, err := uuid.Parse(parts[i]); err == nil {
+				matches[parts[i]] = true
+			}
+		}
+	}
+
+	// Convert map keys to UUID slice
+	var productIDs []uuid.UUID
+	for uuidStr := range matches {
+		if id, err := uuid.Parse(uuidStr); err == nil {
+			productIDs = append(productIDs, id)
+		}
+	}
+
+	return productIDs
 }
