@@ -20,11 +20,15 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/volatiletech/sqlboiler/v4/boil"
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println(".env file not found or failed to load, proceeding with system environment variables")
+	}
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
