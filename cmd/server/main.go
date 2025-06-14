@@ -26,7 +26,7 @@ import (
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
+	if err := godotenv.Load("../../.env"); err != nil {
 		log.Println(".env file not found or failed to load, proceeding with system environment variables")
 	}
 	// Load configuration
@@ -79,6 +79,8 @@ func main() {
 	var openSearchVectorService *service.OpenSearchVectorService
 	var recommendationServiceV2 *service.RecommendationServiceV2
 
+	recommendationRepoV2 := repository.NewRecommendationRepositoryV2(db)
+
 	// Initialize Bedrock Knowledge Base service if configured
 	if cfg.KnowledgeBaseID != "" {
 		bedrockKnowledgeBaseService = service.NewBedrockKnowledgeBaseService(
@@ -108,10 +110,8 @@ func main() {
 	}
 
 	// Initialize V2 recommendation service
-	// Note: Temporarily passing nil for V2 repository - basic features will work with V1 repo fallback
-	// TODO: Implement full RecommendationRepositoryV2 with all required methods
 	recommendationServiceV2 = service.NewRecommendationServiceV2(
-		nil, // V2 repository not yet implemented
+		recommendationRepoV2,
 		bedrockKnowledgeBaseService,
 		openSearchVectorService,
 		bedrockService,
