@@ -15,7 +15,7 @@ import (
 	"github.com/volatiletech/sqlboiler/v4/queries/qm"
 )
 
-// RecommendationRepository implements the interfaces.RecommendationRepositoryInterface
+// RecommendationRepository implements the RecommendationRepositoryInterface
 type RecommendationRepository struct {
 	db boil.ContextExecutor
 }

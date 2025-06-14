@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/interfaces"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -15,13 +14,13 @@ import (
 
 // RecommendationService implements the RecommendationServiceInterface
 type RecommendationService struct {
-	repo        interfaces.RecommendationRepositoryInterface
-	chatService interfaces.ChatServiceInterface
+	repo        RecommendationRepositoryInterface
+	chatService ChatServiceInterface
 	modelID     string
 }
 
 // NewRecommendationService creates a new recommendation service instance
-func NewRecommendationService(repo interfaces.RecommendationRepositoryInterface, chatService interfaces.ChatServiceInterface, modelID string) *RecommendationService {
+func NewRecommendationService(repo RecommendationRepositoryInterface, chatService ChatServiceInterface, modelID string) *RecommendationService {
 	return &RecommendationService{
 		repo:        repo,
 		chatService: chatService,

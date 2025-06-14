@@ -2,7 +2,6 @@ package handler
 
 import (
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/interfaces"
 	"net/http"
 	"strconv"
 
@@ -12,11 +11,11 @@ import (
 
 // RecommendationHandler handles recommendation-related HTTP requests
 type RecommendationHandler struct {
-	recommendationService interfaces.RecommendationServiceInterface
+	recommendationService RecommendationServiceInterface
 }
 
 // NewRecommendationHandler creates a new recommendation handler instance
-func NewRecommendationHandler(recommendationService interfaces.RecommendationServiceInterface) *RecommendationHandler {
+func NewRecommendationHandler(recommendationService RecommendationServiceInterface) *RecommendationHandler {
 	return &RecommendationHandler{
 		recommendationService: recommendationService,
 	}

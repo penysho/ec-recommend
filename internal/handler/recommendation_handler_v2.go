@@ -2,7 +2,6 @@ package handler
 
 import (
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/interfaces"
 	"net/http"
 	"strconv"
 
@@ -12,11 +11,11 @@ import (
 
 // RecommendationHandlerV2 handles advanced RAG-based recommendation requests using Amazon Bedrock Knowledge Bases
 type RecommendationHandlerV2 struct {
-	recommendationServiceV2 interfaces.RecommendationServiceV2Interface
+	recommendationServiceV2 RecommendationServiceV2Interface
 }
 
 // NewRecommendationHandlerV2 creates a new enhanced recommendation handler instance
-func NewRecommendationHandlerV2(recommendationServiceV2 interfaces.RecommendationServiceV2Interface) *RecommendationHandlerV2 {
+func NewRecommendationHandlerV2(recommendationServiceV2 RecommendationServiceV2Interface) *RecommendationHandlerV2 {
 	return &RecommendationHandlerV2{
 		recommendationServiceV2: recommendationServiceV2,
 	}

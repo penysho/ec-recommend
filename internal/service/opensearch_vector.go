@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"ec-recommend/internal/interfaces"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,7 +49,7 @@ func NewOpenSearchVectorService(endpoint, region string, credentials aws.Credent
 }
 
 // VectorSearch performs vector similarity search using k-NN
-func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *interfaces.VectorSearchRequest) (*interfaces.VectorSearchResponse, error) {
+func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *VectorSearchRequest) (*VectorSearchResponse, error) {
 	startTime := time.Now()
 
 	// Build k-NN search query
@@ -95,7 +94,7 @@ func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *interf
 	}
 
 	// Parse results
-	vectorResults := make([]interfaces.VectorSearchResult, 0)
+	vectorResults := make([]VectorSearchResult, 0)
 	totalFound := 0
 
 	if hits, ok := results["hits"].(map[string]interface{}); ok {
@@ -108,7 +107,7 @@ func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *interf
 		if hitsList, ok := hits["hits"].([]interface{}); ok {
 			for _, hit := range hitsList {
 				if hitMap, ok := hit.(map[string]interface{}); ok {
-					result := interfaces.VectorSearchResult{
+					result := VectorSearchResult{
 						ID:    fmt.Sprintf("%v", hitMap["_id"]),
 						Score: float64(hitMap["_score"].(float64)),
 					}
@@ -135,7 +134,7 @@ func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *interf
 
 	processingTime := time.Since(startTime).Milliseconds()
 
-	return &interfaces.VectorSearchResponse{
+	return &VectorSearchResponse{
 		Results:          vectorResults,
 		TotalFound:       totalFound,
 		ProcessingTimeMs: processingTime,
@@ -143,7 +142,7 @@ func (os *OpenSearchVectorService) VectorSearch(ctx context.Context, req *interf
 }
 
 // HybridSearch performs hybrid search combining vector and text search
-func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interfaces.HybridSearchRequest) (*interfaces.HybridSearchResponse, error) {
+func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *HybridSearchRequest) (*HybridSearchResponse, error) {
 	startTime := time.Now()
 
 	// Set default weights if not provided
@@ -199,7 +198,7 @@ func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interf
 		phraseClause := map[string]interface{}{
 			"multi_match": map[string]interface{}{
 				"query":  req.Query,
-				"fields": []string{"name^5", "description^3"},
+				"fields": []string{"name^2", "description"},
 				"type":   "phrase",
 				"boost":  textWeight * 1.5,
 			},
@@ -223,8 +222,8 @@ func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interf
 		return nil, fmt.Errorf("failed to execute hybrid search: %w", err)
 	}
 
-	// Parse results
-	hybridResults := make([]interfaces.HybridSearchResult, 0)
+	// Parse results with separate scoring
+	hybridResults := make([]HybridSearchResult, 0)
 	totalFound := 0
 
 	if hits, ok := results["hits"].(map[string]interface{}); ok {
@@ -237,11 +236,11 @@ func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interf
 		if hitsList, ok := hits["hits"].([]interface{}); ok {
 			for _, hit := range hitsList {
 				if hitMap, ok := hit.(map[string]interface{}); ok {
-					result := interfaces.HybridSearchResult{
+					result := HybridSearchResult{
 						ID:            fmt.Sprintf("%v", hitMap["_id"]),
 						CombinedScore: float64(hitMap["_score"].(float64)),
-						VectorScore:   0.0, // Would need separate scoring for breakdown
-						TextScore:     0.0, // Would need separate scoring for breakdown
+						VectorScore:   0.0, // Would need separate vector scoring
+						TextScore:     0.0, // Would need separate text scoring
 					}
 
 					// Extract metadata from source
@@ -260,7 +259,7 @@ func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interf
 
 	processingTime := time.Since(startTime).Milliseconds()
 
-	return &interfaces.HybridSearchResponse{
+	return &HybridSearchResponse{
 		Results:          hybridResults,
 		TotalFound:       totalFound,
 		ProcessingTimeMs: processingTime,
@@ -268,39 +267,35 @@ func (os *OpenSearchVectorService) HybridSearch(ctx context.Context, req *interf
 }
 
 // IndexVector indexes a vector with metadata
-func (os *OpenSearchVectorService) IndexVector(ctx context.Context, req *interfaces.IndexVectorRequest) error {
+func (os *OpenSearchVectorService) IndexVector(ctx context.Context, req *IndexVectorRequest) error {
 	// Prepare document for indexing
-	doc := map[string]interface{}{
+	document := map[string]interface{}{
 		"product_vector": req.Vector,
 		"content":        req.Content,
-		"indexed_at":     time.Now().UTC(),
 	}
 
 	// Add metadata fields
-	if req.Metadata != nil {
-		for key, value := range req.Metadata {
-			doc[key] = value
-		}
+	for key, value := range req.Metadata {
+		document[key] = value
 	}
 
 	// Convert to JSON
-	docJSON, err := json.Marshal(doc)
+	docBytes, err := json.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("failed to marshal document: %w", err)
 	}
 
-	// Create HTTP request for indexing
+	// Create HTTP request
 	url := fmt.Sprintf("%s/%s/_doc/%s", os.endpoint, req.IndexName, req.ID)
-	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(docJSON))
+	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(docBytes))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Sign the request
-	err = os.signRequest(ctx, httpReq)
-	if err != nil {
+	// Sign request
+	if err := os.signRequest(ctx, httpReq); err != nil {
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
@@ -311,7 +306,7 @@ func (os *OpenSearchVectorService) IndexVector(ctx context.Context, req *interfa
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("indexing failed with status %d: %s", resp.StatusCode, string(body))
 	}
@@ -321,18 +316,18 @@ func (os *OpenSearchVectorService) IndexVector(ctx context.Context, req *interfa
 
 // DeleteVector removes a vector from the index
 func (os *OpenSearchVectorService) DeleteVector(ctx context.Context, vectorID string) error {
-	// This would need index name - in practice, you'd pass it as parameter
-	indexName := "products" // Default index name
+	// This requires knowing the index name - for now, we'll use a default
+	// In production, you'd want to pass the index name or store it with the vector
+	indexName := "products"
 
 	url := fmt.Sprintf("%s/%s/_doc/%s", os.endpoint, indexName, vectorID)
 	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	// Sign the request
-	err = os.signRequest(ctx, httpReq)
-	if err != nil {
+	// Sign request
+	if err := os.signRequest(ctx, httpReq); err != nil {
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
@@ -343,7 +338,7 @@ func (os *OpenSearchVectorService) DeleteVector(ctx context.Context, vectorID st
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
+	if resp.StatusCode != 200 && resp.StatusCode != 404 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("deletion failed with status %d: %s", resp.StatusCode, string(body))
 	}
@@ -352,19 +347,18 @@ func (os *OpenSearchVectorService) DeleteVector(ctx context.Context, vectorID st
 }
 
 // GetVectorMetadata retrieves metadata for a vector
-func (os *OpenSearchVectorService) GetVectorMetadata(ctx context.Context, vectorID string) (*interfaces.VectorMetadata, error) {
-	// This would need index name - in practice, you'd pass it as parameter
-	indexName := "products" // Default index name
+func (os *OpenSearchVectorService) GetVectorMetadata(ctx context.Context, vectorID string) (*VectorMetadata, error) {
+	// This requires knowing the index name - for now, we'll use a default
+	indexName := "products"
 
 	url := fmt.Sprintf("%s/%s/_doc/%s", os.endpoint, indexName, vectorID)
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	// Sign the request
-	err = os.signRequest(ctx, httpReq)
-	if err != nil {
+	// Sign request
+	if err := os.signRequest(ctx, httpReq); err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
 
@@ -379,70 +373,66 @@ func (os *OpenSearchVectorService) GetVectorMetadata(ctx context.Context, vector
 		return nil, fmt.Errorf("vector not found")
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get vector metadata with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("get failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Parse response
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	// Extract metadata
-	metadata := &interfaces.VectorMetadata{
-		ID:        vectorID,
-		IndexName: indexName,
-		Metadata:  make(map[string]interface{}),
+	source, ok := response["_source"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format")
 	}
 
-	if source, ok := result["_source"].(map[string]interface{}); ok {
-		for key, value := range source {
-			if key != "product_vector" { // Exclude vector data from metadata
-				metadata.Metadata[key] = value
-			}
-		}
-
-		// Extract timestamps if available
-		if indexedAt, ok := source["indexed_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, indexedAt); err == nil {
-				metadata.CreatedAt = t.Unix()
-				metadata.UpdatedAt = t.Unix()
-			}
-		}
-
-		// Calculate vector size if vector is present
-		if vector, ok := source["product_vector"].([]interface{}); ok {
-			metadata.VectorSize = len(vector)
+	// Remove vector from metadata to get clean metadata
+	metadata := make(map[string]interface{})
+	for key, value := range source {
+		if key != "product_vector" {
+			metadata[key] = value
 		}
 	}
 
-	return metadata, nil
+	vectorSize := 0
+	if vector, ok := source["product_vector"].([]interface{}); ok {
+		vectorSize = len(vector)
+	}
+
+	return &VectorMetadata{
+		ID:         vectorID,
+		IndexName:  indexName,
+		Metadata:   metadata,
+		CreatedAt:  time.Now().Unix(), // Would need to be stored in the document
+		UpdatedAt:  time.Now().Unix(), // Would need to be stored in the document
+		VectorSize: vectorSize,
+	}, nil
 }
 
 // Helper methods
 
-// executeSearch executes a search query against OpenSearch
 func (os *OpenSearchVectorService) executeSearch(ctx context.Context, indexName string, query map[string]interface{}) (map[string]interface{}, error) {
 	// Convert query to JSON
-	queryJSON, err := json.Marshal(query)
+	queryBytes, err := json.Marshal(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
 	}
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/%s/_search", os.endpoint, indexName)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(queryJSON))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(queryBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Sign the request
-	err = os.signRequest(ctx, httpReq)
-	if err != nil {
+	// Sign request
+	if err := os.signRequest(ctx, httpReq); err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
 
@@ -453,51 +443,54 @@ func (os *OpenSearchVectorService) executeSearch(ctx context.Context, indexName 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("search failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Parse response
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var results map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return result, nil
+	return results, nil
 }
 
-// buildFilterClauses builds OpenSearch filter clauses from filter map
 func (os *OpenSearchVectorService) buildFilterClauses(filters map[string]interface{}) []map[string]interface{} {
-	filterClauses := make([]map[string]interface{}, 0)
+	var filterClauses []map[string]interface{}
 
 	for key, value := range filters {
-		switch v := value.(type) {
-		case string:
-			filterClauses = append(filterClauses, map[string]interface{}{
-				"term": map[string]interface{}{
-					key: v,
-				},
-			})
-		case []string:
-			filterClauses = append(filterClauses, map[string]interface{}{
-				"terms": map[string]interface{}{
-					key: v,
-				},
-			})
-		case map[string]interface{}:
-			// Handle range queries
-			if rangeFilter, ok := v["range"]; ok {
+		switch key {
+		case "category_id", "brand_id", "price_min", "price_max":
+			if key == "price_min" {
 				filterClauses = append(filterClauses, map[string]interface{}{
 					"range": map[string]interface{}{
-						key: rangeFilter,
+						"price": map[string]interface{}{
+							"gte": value,
+						},
+					},
+				})
+			} else if key == "price_max" {
+				filterClauses = append(filterClauses, map[string]interface{}{
+					"range": map[string]interface{}{
+						"price": map[string]interface{}{
+							"lte": value,
+						},
+					},
+				})
+			} else {
+				filterClauses = append(filterClauses, map[string]interface{}{
+					"term": map[string]interface{}{
+						key: value,
 					},
 				})
 			}
 		default:
+			// Generic filter
 			filterClauses = append(filterClauses, map[string]interface{}{
 				"term": map[string]interface{}{
-					key: v,
+					key: value,
 				},
 			})
 		}
@@ -506,23 +499,14 @@ func (os *OpenSearchVectorService) buildFilterClauses(filters map[string]interfa
 	return filterClauses
 }
 
-// signRequest signs the HTTP request with AWS Signature V4
 func (os *OpenSearchVectorService) signRequest(ctx context.Context, req *http.Request) error {
+	// Get credentials
 	creds, err := os.credentials.Retrieve(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve credentials: %w", err)
 	}
 
-	// Get request body for signing
-	if req.Body != nil {
-		bodyBytes, err := io.ReadAll(req.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read request body: %w", err)
-		}
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	}
-
-	// Sign the request
+	// Sign request
 	err = os.signer.SignHTTP(ctx, creds, req, "", "es", os.region, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to sign request: %w", err)
@@ -531,7 +515,7 @@ func (os *OpenSearchVectorService) signRequest(ctx context.Context, req *http.Re
 	return nil
 }
 
-// CreateIndex creates a new index with proper mapping for vector search
+// CreateIndex creates an index with vector field mapping
 func (os *OpenSearchVectorService) CreateIndex(ctx context.Context, indexName string, vectorDimension int) error {
 	mapping := map[string]interface{}{
 		"mappings": map[string]interface{}{
@@ -541,7 +525,7 @@ func (os *OpenSearchVectorService) CreateIndex(ctx context.Context, indexName st
 					"dimension": vectorDimension,
 					"method": map[string]interface{}{
 						"name":   "hnsw",
-						"engine": "lucene",
+						"engine": "nmslib",
 						"parameters": map[string]interface{}{
 							"ef_construction": 128,
 							"m":               24,
@@ -549,15 +533,12 @@ func (os *OpenSearchVectorService) CreateIndex(ctx context.Context, indexName st
 					},
 				},
 				"name": map[string]interface{}{
-					"type": "text",
-					"fields": map[string]interface{}{
-						"keyword": map[string]interface{}{
-							"type": "keyword",
-						},
-					},
+					"type":     "text",
+					"analyzer": "standard",
 				},
 				"description": map[string]interface{}{
-					"type": "text",
+					"type":     "text",
+					"analyzer": "standard",
 				},
 				"brand": map[string]interface{}{
 					"type": "keyword",
@@ -565,49 +546,39 @@ func (os *OpenSearchVectorService) CreateIndex(ctx context.Context, indexName st
 				"category_name": map[string]interface{}{
 					"type": "keyword",
 				},
-				"category_id": map[string]interface{}{
-					"type": "integer",
-				},
 				"price": map[string]interface{}{
-					"type": "float",
+					"type": "double",
 				},
 				"tags": map[string]interface{}{
 					"type": "keyword",
-				},
-				"is_active": map[string]interface{}{
-					"type": "boolean",
-				},
-				"indexed_at": map[string]interface{}{
-					"type": "date",
 				},
 			},
 		},
 		"settings": map[string]interface{}{
 			"index": map[string]interface{}{
 				"knn":                      true,
-				"knn.algo_param.ef_search": 512,
+				"knn.algo_param.ef_search": 100,
 			},
 		},
 	}
 
 	// Convert to JSON
-	mappingJSON, err := json.Marshal(mapping)
+	mappingBytes, err := json.Marshal(mapping)
 	if err != nil {
 		return fmt.Errorf("failed to marshal mapping: %w", err)
 	}
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/%s", os.endpoint, indexName)
-	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(mappingJSON))
+	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(mappingBytes))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Sign the request
-	err = os.signRequest(ctx, httpReq)
-	if err != nil {
+	// Sign request
+	if err := os.signRequest(ctx, httpReq); err != nil {
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
@@ -618,7 +589,7 @@ func (os *OpenSearchVectorService) CreateIndex(ctx context.Context, indexName st
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("index creation failed with status %d: %s", resp.StatusCode, string(body))
 	}

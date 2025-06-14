@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"ec-recommend/internal/dto"
 	"ec-recommend/internal/types"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -224,4 +226,65 @@ func (bc *BedrockClient) isNovaModel() bool {
 	}
 	return bc.modelID[:7] == "amazon." &&
 		(len(bc.modelID) > 11 && bc.modelID[7:11] == "nova")
+}
+
+// Chat provides backward compatibility for old interface
+func (bc *BedrockClient) Chat(ctx context.Context, req *dto.ChatRequest) (*dto.ChatResponse, error) {
+	// For now, use the last user message as the prompt
+	var lastUserMessage string
+	for _, msg := range req.Messages {
+		if msg.Role == "user" {
+			lastUserMessage = msg.Content
+		}
+	}
+
+	if lastUserMessage == "" {
+		return nil, fmt.Errorf("no user message found in conversation")
+	}
+
+	// Generate AI response
+	aiResponse, err := bc.GenerateResponse(ctx, lastUserMessage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate chat response: %w", err)
+	}
+
+	// Convert to DTO format
+	return &dto.ChatResponse{
+		Message: aiResponse.Content,
+		Usage: dto.UsageInfo{
+			InputTokens:  aiResponse.Usage.InputTokens,
+			OutputTokens: aiResponse.Usage.OutputTokens,
+		},
+		Timestamp: time.Now(),
+	}, nil
+}
+
+// HandlerAIResponse represents a response from the AI model for handler use
+type HandlerAIResponse struct {
+	Content string       `json:"content"`
+	Usage   HandlerUsage `json:"usage,omitempty"`
+}
+
+// HandlerUsage represents token usage information for handler
+type HandlerUsage struct {
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+}
+
+// GenerateResponseForHandler generates a response for handler with handler-specific types
+func (bc *BedrockClient) GenerateResponseForHandler(ctx context.Context, prompt string) (*HandlerAIResponse, error) {
+	// Reuse the existing GenerateResponse method
+	aiResponse, err := bc.GenerateResponse(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to handler format
+	return &HandlerAIResponse{
+		Content: aiResponse.Content,
+		Usage: HandlerUsage{
+			InputTokens:  aiResponse.Usage.InputTokens,
+			OutputTokens: aiResponse.Usage.OutputTokens,
+		},
+	}, nil
 }

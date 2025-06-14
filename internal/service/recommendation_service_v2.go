@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/interfaces"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,10 +15,10 @@ import (
 
 // RecommendationServiceV2 implements the RecommendationServiceV2Interface with RAG and vector search capabilities
 type RecommendationServiceV2 struct {
-	repo             interfaces.RecommendationRepositoryV2Interface
-	bedrockKB        interfaces.BedrockKnowledgeBaseInterface
-	openSearchVector interfaces.OpenSearchVectorInterface
-	chatService      interfaces.ChatServiceInterface
+	repo             RecommendationRepositoryV2Interface
+	bedrockKB        BedrockKnowledgeBaseInterface
+	openSearchVector OpenSearchVectorInterface
+	chatService      ChatServiceInterface
 	modelID          string
 	knowledgeBaseID  string
 	embeddingModelID string
@@ -27,10 +26,10 @@ type RecommendationServiceV2 struct {
 
 // NewRecommendationServiceV2 creates a new enhanced recommendation service instance
 func NewRecommendationServiceV2(
-	repo interfaces.RecommendationRepositoryV2Interface,
-	bedrockKB interfaces.BedrockKnowledgeBaseInterface,
-	openSearchVector interfaces.OpenSearchVectorInterface,
-	chatService interfaces.ChatServiceInterface,
+	repo RecommendationRepositoryV2Interface,
+	bedrockKB BedrockKnowledgeBaseInterface,
+	openSearchVector OpenSearchVectorInterface,
+	chatService ChatServiceInterface,
 	modelID, knowledgeBaseID, embeddingModelID string,
 ) *RecommendationServiceV2 {
 	return &RecommendationServiceV2{
@@ -768,7 +767,7 @@ Please provide detailed product recommendations that match this customer's prefe
 	)
 }
 
-func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Context, kbResponse *interfaces.BedrockKnowledgeBaseResponse, profile *dto.CustomerProfile, limit int) ([]dto.ProductRecommendationV2, []dto.ReasoningStep, error) {
+func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Context, kbResponse *BedrockKnowledgeBaseResponse, profile *dto.CustomerProfile, limit int) ([]dto.ProductRecommendationV2, []dto.ReasoningStep, error) {
 	var recommendations []dto.ProductRecommendationV2
 	var reasoningChain []dto.ReasoningStep
 
@@ -803,7 +802,7 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 	return recommendations, reasoningChain, nil
 }
 
-func (rs *RecommendationServiceV2) createKnowledgeInsights(kbResponse *interfaces.BedrockKnowledgeBaseResponse) *dto.KnowledgeInsights {
+func (rs *RecommendationServiceV2) createKnowledgeInsights(kbResponse *BedrockKnowledgeBaseResponse) *dto.KnowledgeInsights {
 	insights := &dto.KnowledgeInsights{
 		ConfidenceLevel: 0.8,
 		RelatedConcepts: make(map[string]float64),

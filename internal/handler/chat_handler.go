@@ -1,22 +1,29 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/interfaces"
+	"ec-recommend/internal/types"
 
 	"github.com/gin-gonic/gin"
 )
 
+// ChatServiceInterface defines the interface for chat service operations used by handler
+type ChatServiceInterface interface {
+	// GenerateResponse generates a response for the given prompt
+	GenerateResponse(ctx context.Context, prompt string) (*types.AIResponse, error)
+}
+
 // ChatHandler handles chat-related HTTP requests
 type ChatHandler struct {
-	chatService interfaces.ChatServiceInterface
+	chatService ChatServiceInterface
 }
 
 // NewChatHandler creates a new chat handler
-func NewChatHandler(chatService interfaces.ChatServiceInterface) *ChatHandler {
+func NewChatHandler(chatService ChatServiceInterface) *ChatHandler {
 	return &ChatHandler{
 		chatService: chatService,
 	}
