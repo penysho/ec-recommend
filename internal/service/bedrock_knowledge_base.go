@@ -344,53 +344,19 @@ Please extract:
 Return format: [{"name": "product name", "category": "category", "brand": "brand", "features": ["feature1", "feature2"]}]
 `, text)
 
-	// Create input for Claude model
-	input := map[string]interface{}{
-		"anthropic_version": "bedrock-2023-05-31",
-		"max_tokens":        1000,
-		"messages": []map[string]interface{}{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-	}
-
-	inputBytes, err := json.Marshal(input)
+	// Use Nova model for entity extraction
+	response, err := bkb.callNovaForAnalysis(ctx, prompt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
+		return nil, fmt.Errorf("failed to extract entities: %w", err)
 	}
 
-	// Call Claude model
-	invokeInput := &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(bkb.modelARN),
-		ContentType: aws.String("application/json"),
-		Body:        inputBytes,
-	}
-
-	result, err := bkb.runtimeClient.InvokeModel(ctx, invokeInput)
-	if err != nil {
-		return nil, fmt.Errorf("failed to invoke model: %w", err)
-	}
-
-	// Parse the response
-	var response struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-
-	if err := json.Unmarshal(result.Body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if len(response.Content) == 0 {
+	if response == "" {
 		return []map[string]interface{}{}, nil
 	}
 
 	// Parse the JSON from the response
 	var entities []map[string]interface{}
-	responseText := response.Content[0].Text
+	responseText := response
 
 	// Clean up the response text to extract JSON
 	jsonStart := strings.Index(responseText, "[")
@@ -431,51 +397,13 @@ Please provide:
 Keep the explanation concise but informative.
 `, bkb.formatProfileForPrompt(customerProfile), bkb.formatProductsForPrompt(recommendedProducts))
 
-	// Create input for Claude model
-	input := map[string]interface{}{
-		"anthropic_version": "bedrock-2023-05-31",
-		"max_tokens":        1500,
-		"messages": []map[string]interface{}{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-	}
-
-	inputBytes, err := json.Marshal(input)
+	// Use Nova model for explanation generation
+	response, err := bkb.callNovaForAnalysis(ctx, prompt)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	// Call Claude model
-	invokeInput := &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(bkb.modelARN),
-		ContentType: aws.String("application/json"),
-		Body:        inputBytes,
-	}
-
-	result, err := bkb.runtimeClient.InvokeModel(ctx, invokeInput)
-	if err != nil {
-		return "", fmt.Errorf("failed to invoke model: %w", err)
-	}
-
-	// Parse the response
-	var response struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-
-	if err := json.Unmarshal(result.Body, &response); err != nil {
-		return "", fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if len(response.Content) == 0 {
 		return "Unable to generate explanation at this time.", nil
 	}
 
-	return response.Content[0].Text, nil
+	return response, nil
 }
 
 // Helper functions
@@ -576,21 +504,27 @@ func extractModelIDFromARN(arn string) string {
 }
 
 // GetProductsWithVectorSearch performs vector-based product search using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockVectorSearchResponse, error) {
 	startTime := time.Now()
 
-	// Convert vector to query format for Knowledge Base
-	vectorQuery := "Product similarity search based on vector embeddings"
+	// Step 1: Analyze the input vector to extract semantic features
+	semanticFeatures, err := bkb.analyzeVectorForFeatures(ctx, vector)
+	if err != nil {
+		log.Printf("Warning: Failed to analyze vector features: %v", err)
+		semanticFeatures = []string{"similar products"} // Fallback
+	}
 
-	// Configure retrieval for vector search only (using hybrid since pure vector is not available)
+	// Step 2: Convert vector features to search query
+	vectorQuery := bkb.buildVectorBasedQuery(semanticFeatures, filters)
+
+	// Step 3: Perform initial retrieval with expanded result set for vector ranking
 	retrievalConfig := &types.KnowledgeBaseRetrievalConfiguration{
 		VectorSearchConfiguration: &types.KnowledgeBaseVectorSearchConfiguration{
-			NumberOfResults:    aws.Int32(int32(min(limit, 50))), // AWS recommends max 50 results per query
-			OverrideSearchType: types.SearchTypeHybrid,           // Use hybrid as closest to vector search
+			NumberOfResults:    aws.Int32(int32(min(limit*3, 100))), // Get more results for vector ranking
+			OverrideSearchType: types.SearchTypeHybrid,              // Use hybrid search for better coverage
 		},
 	}
 
-	// Create retrieve request
 	retrieveInput := &bedrockagentruntime.RetrieveInput{
 		KnowledgeBaseId:        aws.String(bkb.knowledgeBaseID),
 		RetrievalQuery:         &types.KnowledgeBaseQuery{Text: aws.String(vectorQuery)},
@@ -603,40 +537,77 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 		return nil, fmt.Errorf("failed to retrieve products with vector search: %w", err)
 	}
 
-	// Convert results to ProductRecommendationV2
-	products, err := bkb.convertKnowledgeBaseResultsToProducts(retrieveOutput.RetrievalResults, "vector_search")
+	// Step 4: Convert results to BedrockSearchResult
+	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "vector_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
 
-	// Enhance results with vector metadata
-	for i := range products {
+	// Step 5: Use Knowledge Base scores directly instead of recalculating
+	for i := range results {
 		if i < len(retrieveOutput.RetrievalResults) {
-			products[i].VectorMetadata = &dto.VectorMetadata{
-				DistanceScore:   float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score)),
-				SearchMethod:    "vector_search",
-				MatchedCriteria: []string{"vector_similarity"},
-				EmbeddingModel:  bkb.embeddingModelID,
-			}
-			products[i].SimilarityScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
-			products[i].ConfidenceScore = bkb.calculateConfidenceFromScore(products[i].SimilarityScore)
+			// Use the Knowledge Base score directly
+			kbScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+			results[i].SimilarityScore = kbScore
+			results[i].DistanceScore = kbScore
 		}
 	}
 
-	// Apply additional filtering if needed
+	// Step 6: Rank results by Knowledge Base similarity scores
+	results = bkb.rankBedrockResultsByScore(results)
+
+	// Step 7: Enhance results with vector metadata
+	for i := range results {
+		if i < len(retrieveOutput.RetrievalResults) {
+			vectorScore := results[i].SimilarityScore
+			if vectorScore == 0 {
+				vectorScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+			}
+
+			results[i].DistanceScore = vectorScore
+			results[i].SearchMethod = "vector_search"
+			results[i].MatchedCriteria = append([]string{"vector_similarity"}, semanticFeatures...)
+			results[i].EmbeddingModel = bkb.embeddingModelID
+			results[i].SemanticClusters = bkb.extractVectorClusters(vector)
+			results[i].SimilarityScore = vectorScore
+			results[i].ConfidenceScore = bkb.calculateVectorConfidence(vectorScore, len(semanticFeatures))
+			results[i].RetrievalRank = i + 1
+		}
+	}
+
+	// Step 8: Apply additional filtering if needed
 	if len(filters) > 0 {
-		products = bkb.applyPostRetrievalFilters(products, filters)
+		results = bkb.applyPostRetrievalFiltersToBedrockResults(results, filters)
+	}
+
+	// Step 9: Final selection and limit
+	if len(results) > limit {
+		results = results[:limit]
 	}
 
 	// Log vector search operation
 	processingTime := time.Since(startTime).Milliseconds()
-	log.Printf("Vector search completed: %d results in %dms", len(products), processingTime)
+	log.Printf("Vector search completed: %d results in %dms with %d-dimensional vector",
+		len(results), processingTime, len(vector))
 
-	return products[:min(len(products), limit)], nil
+	return &dto.BedrockVectorSearchResponse{
+		Results:          results,
+		TotalFound:       len(results),
+		ProcessingTimeMs: processingTime,
+		SearchMetadata: &dto.BedrockSearchMeta{
+			SearchType:       "vector_search",
+			EmbeddingModel:   bkb.embeddingModelID,
+			KnowledgeBaseID:  bkb.knowledgeBaseID,
+			SimilarityMetric: "cosine",
+			FiltersApplied:   filters,
+			RerankerUsed:     false,
+			CacheUsed:        false,
+		},
+	}, nil
 }
 
 // GetProductsWithSemanticSearch performs semantic/text-based product search using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*dto.BedrockSemanticSearchResponse, error) {
 	startTime := time.Now()
 
 	// Enhance query with context for better semantic understanding
@@ -664,52 +635,53 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx contex
 		return nil, fmt.Errorf("failed to retrieve products with semantic search: %w", err)
 	}
 
-	// Convert results to ProductRecommendationV2
-	products, err := bkb.convertKnowledgeBaseResultsToProducts(retrieveOutput.RetrievalResults, "semantic_search")
+	// Convert results to BedrockSearchResult
+	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "semantic_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
 
-	// Extract semantic insights from the query
-	semanticInsights, err := bkb.extractSemanticInsights(ctx, query, retrieveOutput.RetrievalResults)
-	if err != nil {
-		log.Printf("Warning: Failed to extract semantic insights: %v", err)
-	}
-
 	// Enhance results with semantic metadata
-	for i := range products {
+	for i := range results {
 		if i < len(retrieveOutput.RetrievalResults) {
-			products[i].VectorMetadata = &dto.VectorMetadata{
-				DistanceScore:    float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score)),
-				SearchMethod:     "semantic_search",
-				MatchedCriteria:  bkb.extractMatchedCriteria(retrieveOutput.RetrievalResults[i]),
-				SemanticClusters: bkb.extractSemanticClusters(semanticInsights),
-				EmbeddingModel:   bkb.embeddingModelID,
-			}
-			products[i].SimilarityScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
-			products[i].ConfidenceScore = bkb.calculateConfidenceFromScore(products[i].SimilarityScore)
-
-			// Add AI-generated insights if available
-			if semanticInsights != nil {
-				products[i].AIInsights = bkb.generateProductAIInsights(ctx, products[i], semanticInsights)
-			}
+			results[i].DistanceScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+			results[i].SearchMethod = "semantic_search"
+			results[i].MatchedCriteria = bkb.extractMatchedCriteria(retrieveOutput.RetrievalResults[i])
+			results[i].EmbeddingModel = bkb.embeddingModelID
+			results[i].SimilarityScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+			results[i].ConfidenceScore = bkb.calculateConfidenceFromScore(results[i].SimilarityScore)
+			results[i].RetrievalRank = i + 1
 		}
 	}
 
 	// Apply additional filtering if needed
 	if len(filters) > 0 {
-		products = bkb.applyPostRetrievalFilters(products, filters)
+		results = bkb.applyPostRetrievalFiltersToBedrockResults(results, filters)
 	}
 
 	// Log semantic search operation
 	processingTime := time.Since(startTime).Milliseconds()
-	log.Printf("Semantic search completed: %d results in %dms for query: %s", len(products), processingTime, query)
+	log.Printf("Semantic search completed: %d results in %dms for query: %s", len(results), processingTime, query)
 
-	return products[:min(len(products), limit)], nil
+	return &dto.BedrockSemanticSearchResponse{
+		Query:            query,
+		Results:          results[:min(len(results), limit)],
+		TotalFound:       len(results),
+		ProcessingTimeMs: processingTime,
+		SearchMetadata: &dto.BedrockSearchMeta{
+			SearchType:       "semantic_search",
+			EmbeddingModel:   bkb.embeddingModelID,
+			KnowledgeBaseID:  bkb.knowledgeBaseID,
+			SimilarityMetric: "hybrid",
+			FiltersApplied:   filters,
+			RerankerUsed:     false,
+			CacheUsed:        false,
+		},
+	}, nil
 }
 
 // GetProductsWithHybridSearch performs hybrid search combining vector and semantic approaches using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockHybridSearchResponse, error) {
 	startTime := time.Now()
 
 	// Enhance query for hybrid search context
@@ -736,61 +708,61 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.
 		return nil, fmt.Errorf("failed to retrieve products with hybrid search: %w", err)
 	}
 
-	// Convert results to ProductRecommendationV2
-	products, err := bkb.convertKnowledgeBaseResultsToProducts(retrieveOutput.RetrievalResults, "hybrid_search")
+	// Convert results to BedrockSearchResult
+	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "hybrid_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hybrid search results: %w", err)
 	}
 
-	// Extract semantic insights for better understanding
-	semanticInsights, err := bkb.extractSemanticInsights(ctx, query, retrieveOutput.RetrievalResults)
-	if err != nil {
-		log.Printf("Warning: Failed to extract semantic insights for hybrid search: %v", err)
-	}
-
 	// Apply hybrid ranking algorithm - combine vector similarity and semantic relevance
-	products = bkb.applyHybridRanking(products, vector, query, retrieveOutput.RetrievalResults)
+	results = bkb.applyHybridRankingToBedrockResults(results, vector, query, retrieveOutput.RetrievalResults)
 
 	// Enhance results with comprehensive metadata
-	for i := range products {
+	for i := range results {
 		if i < len(retrieveOutput.RetrievalResults) {
-			products[i].VectorMetadata = &dto.VectorMetadata{
-				DistanceScore:    float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score)),
-				SearchMethod:     "hybrid_search",
-				MatchedCriteria:  append([]string{"vector_similarity", "semantic_relevance"}, bkb.extractMatchedCriteria(retrieveOutput.RetrievalResults[i])...),
-				SemanticClusters: bkb.extractSemanticClusters(semanticInsights),
-				EmbeddingModel:   bkb.embeddingModelID,
-			}
+			results[i].DistanceScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+			results[i].SearchMethod = "hybrid_search"
+			results[i].MatchedCriteria = append([]string{"vector_similarity", "semantic_relevance"}, bkb.extractMatchedCriteria(retrieveOutput.RetrievalResults[i])...)
+			results[i].EmbeddingModel = bkb.embeddingModelID
 
 			// Calculate hybrid confidence score (weighted combination)
 			vectorScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
-			semanticScore := bkb.calculateSemanticRelevance(products[i], query)
-			products[i].SimilarityScore = vectorScore
-			products[i].ConfidenceScore = bkb.calculateHybridConfidence(vectorScore, semanticScore)
-
-			// Add comprehensive AI insights
-			if semanticInsights != nil {
-				products[i].AIInsights = bkb.generateProductAIInsights(ctx, products[i], semanticInsights)
-			}
-
-			// Add relevance context explaining why this product is recommended
-			products[i].RelevanceContext = bkb.generateRelevanceContext(products[i], query, vector)
+			semanticScore := bkb.calculateSemanticRelevanceForBedrock(results[i], query)
+			results[i].SimilarityScore = vectorScore
+			results[i].ConfidenceScore = bkb.calculateHybridConfidence(vectorScore, semanticScore)
+			results[i].RetrievalRank = i + 1
 		}
 	}
 
 	// Apply additional filtering if needed
 	if len(filters) > 0 {
-		products = bkb.applyPostRetrievalFilters(products, filters)
+		results = bkb.applyPostRetrievalFiltersToBedrockResults(results, filters)
 	}
 
 	// Final ranking and selection
-	products = bkb.finalHybridRanking(products, limit)
+	results = bkb.finalHybridRankingForBedrock(results, limit)
 
 	// Log hybrid search operation
 	processingTime := time.Since(startTime).Milliseconds()
-	log.Printf("Hybrid search completed: %d results in %dms for query: %s", len(products), processingTime, query)
+	log.Printf("Hybrid search completed: %d results in %dms for query: %s", len(results), processingTime, query)
 
-	return products[:min(len(products), limit)], nil
+	return &dto.BedrockHybridSearchResponse{
+		Query:            query,
+		Vector:           vector,
+		Results:          results[:min(len(results), limit)],
+		TotalFound:       len(results),
+		ProcessingTimeMs: processingTime,
+		SearchMetadata: &dto.BedrockSearchMeta{
+			SearchType:         "hybrid_search",
+			EmbeddingModel:     bkb.embeddingModelID,
+			KnowledgeBaseID:    bkb.knowledgeBaseID,
+			SimilarityMetric:   "hybrid",
+			FiltersApplied:     filters,
+			RerankerUsed:       true,
+			CacheUsed:          false,
+			HybridSearchWeight: map[string]float64{"vector": 0.6, "semantic": 0.4},
+		},
+	}, nil
 }
 
 // Helper methods for the new search implementations
@@ -829,102 +801,124 @@ func (bkb *BedrockKnowledgeBaseService) enhanceHybridQuery(query string, filters
 	return enhancedQuery
 }
 
-// buildRetrievalFilter builds the retrieval filter from the provided filters map
-// Note: Returns nil for now as metadata filtering implementation depends on knowledge base schema
-func (bkb *BedrockKnowledgeBaseService) buildRetrievalFilter(filters map[string]interface{}) interface{} {
-	// AWS Bedrock Knowledge Base supports metadata filtering
-	// This is a simplified implementation - actual filtering would depend on your metadata structure
-	if len(filters) == 0 {
-		return nil
-	}
-
-	// For now, return nil and handle filtering in post-processing
-	// In production, you would implement proper metadata filtering based on your knowledge base schema
-	return nil
-}
-
-// convertFilterValue converts a filter value to the appropriate Bedrock format
-func (bkb *BedrockKnowledgeBaseService) convertFilterValue(key string, value interface{}) interface{} {
-	// Convert various filter types to Bedrock-compatible format
-	switch key {
-	case "category_id":
-		if categoryID, ok := value.(int); ok {
-			return categoryID
-		}
-	case "min_price", "max_price":
-		if price, ok := value.(float64); ok {
-			return price
-		}
-	case "brand":
-		if brand, ok := value.(string); ok {
-			return brand
-		}
-	}
-	return nil
-}
-
 // convertKnowledgeBaseResultsToProducts converts Bedrock Knowledge Base results to ProductRecommendationV2
 func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToProducts(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
 	products := make([]dto.ProductRecommendationV2, 0, len(results))
 
 	for _, result := range results {
-		// Parse product information from the retrieved content
-		product, err := bkb.parseProductFromContent(aws.ToString(result.Content.Text))
+		productID, err := bkb.parseKnowledgeBaseDocument(aws.ToString(result.Content.Text))
 		if err != nil {
 			log.Printf("Warning: Failed to parse product from content: %v", err)
 			continue
 		}
 
-		// Set search-specific metadata
-		product.VectorMetadata = &dto.VectorMetadata{
-			DistanceScore:  float64(aws.ToFloat64(result.Score)),
-			SearchMethod:   searchMethod,
-			EmbeddingModel: bkb.embeddingModelID,
-		}
-
-		products = append(products, product)
+		products = append(products, dto.ProductRecommendationV2{
+			ProductID: productID,
+			VectorMetadata: &dto.VectorMetadata{
+				DistanceScore:  float64(aws.ToFloat64(result.Score)),
+				SearchMethod:   searchMethod,
+				EmbeddingModel: bkb.embeddingModelID,
+			},
+		})
 	}
 
 	return products, nil
 }
 
-// parseProductFromContent parses product information from retrieved content
-func (bkb *BedrockKnowledgeBaseService) parseProductFromContent(content string) (dto.ProductRecommendationV2, error) {
-	// This is a simplified implementation
-	// In practice, you'd want more sophisticated parsing based on your data structure
-	var product dto.ProductRecommendationV2
+// parseKnowledgeBaseDocument parses the Knowledge Base document format
+// Extracts only the product_id from content
+func (bkb *BedrockKnowledgeBaseService) parseKnowledgeBaseDocument(content string) (uuid.UUID, error) {
+	lines := strings.Split(content, "\n")
 
-	// Try to parse JSON if the content is structured
-	if strings.HasPrefix(content, "{") {
-		if err := json.Unmarshal([]byte(content), &product); err == nil {
-			return product, nil
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "product_id:") {
+			idStr := bkb.extractMarkdownValue(line, "product_id:")
+
+			if idStr != "" {
+				// Extract only the UUID part (first 36 characters in UUID format)
+				uuidStr := bkb.extractUUIDFromString(idStr)
+				if uuidStr != "" {
+					if parsedID, err := uuid.Parse(uuidStr); err == nil {
+						return parsedID, nil
+					}
+				}
+			}
 		}
 	}
 
-	// If not JSON, create a basic product from text content
-	// This is a placeholder implementation
-	product = dto.ProductRecommendationV2{
-		ProductID:   uuid.New(), // This should come from actual data
-		Name:        bkb.extractProductName(content),
-		Description: content,
-		// Other fields would be populated based on your data structure
-	}
-
-	return product, nil
+	return uuid.Nil, fmt.Errorf("no product_id found in content")
 }
 
-// extractProductName extracts product name from content (simplified implementation)
-func (bkb *BedrockKnowledgeBaseService) extractProductName(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) > 0 {
-		// Return first line as name, truncated if too long
-		name := strings.TrimSpace(lines[0])
-		if len(name) > 100 {
-			name = name[:100] + "..."
+// extractMarkdownValue extracts value from markdown bold format
+func (bkb *BedrockKnowledgeBaseService) extractMarkdownValue(line, key string) string {
+	if idx := strings.Index(line, key); idx != -1 {
+		remaining := strings.TrimSpace(line[idx+len(key):])
+		// Remove trailing markdown or other formatting
+		if spaceIdx := strings.Index(remaining, "  "); spaceIdx != -1 {
+			remaining = remaining[:spaceIdx]
 		}
-		return name
+		return strings.TrimSpace(remaining)
 	}
-	return "Unknown Product"
+	return ""
+}
+
+// extractUUIDFromString extracts UUID from a string that may contain additional text
+func (bkb *BedrockKnowledgeBaseService) extractUUIDFromString(text string) string {
+	// UUID format: 8-4-4-4-12 characters (36 total including hyphens)
+	// Example: e491fc15-95de-4b8a-b3d7-6310dbf0b4db
+
+	// First try to find UUID at the beginning of the string
+	if len(text) >= 36 {
+		candidate := text[:36]
+		// Check if it matches UUID format (contains 4 hyphens at correct positions)
+		if len(candidate) == 36 &&
+			candidate[8] == '-' && candidate[13] == '-' &&
+			candidate[18] == '-' && candidate[23] == '-' {
+			// Validate that all other characters are hex digits
+			if bkb.isValidUUIDFormat(candidate) {
+				return candidate
+			}
+		}
+	}
+
+	// If not found at beginning, search within the text
+	words := strings.Fields(text)
+	for _, word := range words {
+		if len(word) == 36 &&
+			word[8] == '-' && word[13] == '-' &&
+			word[18] == '-' && word[23] == '-' {
+			if bkb.isValidUUIDFormat(word) {
+				return word
+			}
+		}
+	}
+
+	return ""
+}
+
+// isValidUUIDFormat checks if a string matches UUID format
+func (bkb *BedrockKnowledgeBaseService) isValidUUIDFormat(candidate string) bool {
+	if len(candidate) != 36 {
+		return false
+	}
+
+	for i, char := range candidate {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if char != '-' {
+				return false
+			}
+		} else {
+			// Check if character is valid hex digit (0-9, a-f, A-F)
+			if !((char >= '0' && char <= '9') ||
+				(char >= 'a' && char <= 'f') ||
+				(char >= 'A' && char <= 'F')) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // calculateConfidenceFromScore calculates confidence score from similarity score
@@ -961,8 +955,8 @@ Extract:
 Provide insights in JSON format.
 `, query, bkb.formatResultsForAnalysis(results))
 
-	// Call Claude model for analysis
-	response, err := bkb.callClaudeForAnalysis(ctx, prompt)
+	// Call Nova model for analysis
+	response, err := bkb.callNovaForAnalysis(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract semantic insights: %w", err)
 	}
@@ -994,17 +988,22 @@ func (bkb *BedrockKnowledgeBaseService) formatResultsForAnalysis(results []types
 	return formatted.String()
 }
 
-// callClaudeForAnalysis calls Claude model for semantic analysis
-func (bkb *BedrockKnowledgeBaseService) callClaudeForAnalysis(ctx context.Context, prompt string) (string, error) {
-	// Prepare input for Claude
+// callNovaForAnalysis calls Amazon Nova model for semantic analysis
+func (bkb *BedrockKnowledgeBaseService) callNovaForAnalysis(ctx context.Context, prompt string) (string, error) {
+	// Prepare input for Amazon Nova model
 	input := map[string]interface{}{
-		"anthropic_version": "bedrock-2023-05-31",
-		"max_tokens":        2000,
 		"messages": []map[string]interface{}{
 			{
-				"role":    "user",
-				"content": prompt,
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"text": prompt,
+					},
+				},
 			},
+		},
+		"inferenceConfig": map[string]interface{}{
+			"maxTokens": 2000,
 		},
 	}
 
@@ -1013,34 +1012,52 @@ func (bkb *BedrockKnowledgeBaseService) callClaudeForAnalysis(ctx context.Contex
 		return "", fmt.Errorf("failed to marshal input: %w", err)
 	}
 
-	// Call Claude model
+	// Extract model ID from ARN or use directly
+	modelID := bkb.extractNovaModelID()
+
+	// Call Nova model
 	invokeInput := &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(bkb.modelARN),
+		ModelId:     aws.String(modelID),
 		ContentType: aws.String("application/json"),
 		Body:        inputBytes,
 	}
 
 	result, err := bkb.runtimeClient.InvokeModel(ctx, invokeInput)
 	if err != nil {
-		return "", fmt.Errorf("failed to invoke Claude model: %w", err)
+		return "", fmt.Errorf("failed to invoke Nova model: %w", err)
 	}
 
-	// Parse response
+	// Parse Nova response format
 	var response struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
+		Output struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		} `json:"output"`
 	}
 
 	if err := json.Unmarshal(result.Body, &response); err != nil {
-		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+		return "", fmt.Errorf("failed to unmarshal Nova response: %w", err)
 	}
 
-	if len(response.Content) == 0 {
-		return "", fmt.Errorf("no content in response")
+	if len(response.Output.Message.Content) == 0 {
+		return "", fmt.Errorf("no content in Nova response")
 	}
 
-	return response.Content[0].Text, nil
+	return response.Output.Message.Content[0].Text, nil
+}
+
+// extractNovaModelID extracts or determines the Nova model ID to use
+func (bkb *BedrockKnowledgeBaseService) extractNovaModelID() string {
+	// If modelARN contains Nova model, extract it
+	if strings.Contains(bkb.modelARN, "nova") {
+		return extractModelIDFromARN(bkb.modelARN)
+	}
+
+	// Default to Nova Lite model if not explicitly set
+	return "amazon.nova-lite-v1:0"
 }
 
 // extractMatchedCriteria extracts matched criteria from a retrieval result
@@ -1328,4 +1345,424 @@ func (bkb *BedrockKnowledgeBaseService) extractTargetAudience(product dto.Produc
 	}
 
 	return audience
+}
+
+// analyzeVectorForFeatures analyzes the input vector to extract semantic features using Claude
+func (bkb *BedrockKnowledgeBaseService) analyzeVectorForFeatures(ctx context.Context, vector []float64) ([]string, error) {
+	// Use Claude to analyze vector patterns and extract semantic features
+	// This is a simplified approach - convert vector to textual representation for analysis
+
+	// Calculate basic statistics from vector
+	var sum, max, min float64
+	max = vector[0]
+	min = vector[0]
+
+	for _, v := range vector {
+		sum += v
+		if v > max {
+			max = v
+		}
+		if v < min {
+			min = v
+		}
+	}
+
+	mean := sum / float64(len(vector))
+
+	// Find dominant dimensions (values significantly above mean)
+	dominantDims := []int{}
+	threshold := mean + (max-mean)*0.3 // 30% above mean
+
+	for i, v := range vector {
+		if v > threshold {
+			dominantDims = append(dominantDims, i)
+		}
+	}
+
+	// Create analysis prompt for Claude
+	prompt := fmt.Sprintf(`
+Analyze this product embedding vector to extract semantic features:
+
+Vector Statistics:
+- Dimensions: %d
+- Mean: %.4f
+- Max: %.4f
+- Min: %.4f
+- Dominant dimensions: %v
+
+Based on these vector characteristics, extract likely product features and categories.
+Return a JSON array of semantic features like: ["electronics", "portable", "wireless", "premium"]
+
+Focus on:
+1. Product categories that might have these embedding patterns
+2. Key features suggested by the dominant dimensions
+3. Quality indicators from the vector distribution
+
+Limit to 5-8 most relevant features.
+`, len(vector), mean, max, min, dominantDims)
+
+	response, err := bkb.callNovaForAnalysis(ctx, prompt)
+	if err != nil {
+		// Fallback to statistical analysis
+		return bkb.extractFeaturesFromVectorStats(mean, max, min, dominantDims), nil
+	}
+
+	// Parse Claude's response
+	var features []string
+
+	// Extract JSON array from response
+	jsonStart := strings.Index(response, "[")
+	jsonEnd := strings.LastIndex(response, "]")
+
+	if jsonStart != -1 && jsonEnd != -1 {
+		jsonText := response[jsonStart : jsonEnd+1]
+		if err := json.Unmarshal([]byte(jsonText), &features); err == nil {
+			return features, nil
+		}
+	}
+
+	// Fallback if parsing fails
+	return bkb.extractFeaturesFromVectorStats(mean, max, min, dominantDims), nil
+}
+
+// extractFeaturesFromVectorStats extracts features from vector statistics as fallback
+func (bkb *BedrockKnowledgeBaseService) extractFeaturesFromVectorStats(mean, max, min float64, dominantDims []int) []string {
+	features := []string{}
+
+	// Basic feature extraction based on vector statistics
+	if mean > 0.5 {
+		features = append(features, "high_engagement")
+	}
+	if max > 0.8 {
+		features = append(features, "premium")
+	}
+	if len(dominantDims) > len(dominantDims)/4 {
+		features = append(features, "feature_rich")
+	}
+	if min > 0.1 {
+		features = append(features, "well_balanced")
+	}
+
+	// Add generic features if nothing specific found
+	if len(features) == 0 {
+		features = []string{"similar_products", "related_items"}
+	}
+
+	return features
+}
+
+// buildVectorBasedQuery builds a search query based on extracted vector features
+func (bkb *BedrockKnowledgeBaseService) buildVectorBasedQuery(semanticFeatures []string, filters map[string]interface{}) string {
+	var queryBuilder strings.Builder
+
+	// Start with feature-based query
+	queryBuilder.WriteString("Find products with similar characteristics: ")
+	queryBuilder.WriteString(strings.Join(semanticFeatures, ", "))
+
+	// Add filter context
+	if categoryID, ok := filters["category_id"]; ok {
+		queryBuilder.WriteString(fmt.Sprintf(" in category %v", categoryID))
+	}
+
+	if brand, ok := filters["brand"]; ok {
+		queryBuilder.WriteString(fmt.Sprintf(" from brand %v", brand))
+	}
+
+	if minPrice, ok := filters["min_price"]; ok {
+		if maxPrice, ok := filters["max_price"]; ok {
+			queryBuilder.WriteString(fmt.Sprintf(" with price range %v to %v", minPrice, maxPrice))
+		}
+	}
+
+	// Add similarity emphasis
+	queryBuilder.WriteString(" - prioritize products with matching features and similar quality")
+
+	return queryBuilder.String()
+}
+
+// rankByVectorSimilarity ranks products by their vector similarity scores
+func (bkb *BedrockKnowledgeBaseService) rankByVectorSimilarity(products []dto.ProductRecommendationV2) []dto.ProductRecommendationV2 {
+	// Sort products by similarity score in descending order
+	sort.Slice(products, func(i, j int) bool {
+		return products[i].SimilarityScore > products[j].SimilarityScore
+	})
+
+	return products
+}
+
+// extractVectorClusters extracts semantic clusters from vector analysis
+func (bkb *BedrockKnowledgeBaseService) extractVectorClusters(vector []float64) []string {
+	clusters := []string{}
+
+	// Simple clustering based on vector characteristics
+	var sum float64
+	for _, v := range vector {
+		sum += v
+	}
+	mean := sum / float64(len(vector))
+
+	// Cluster based on mean value ranges
+	if mean > 0.7 {
+		clusters = append(clusters, "high_similarity")
+	} else if mean > 0.4 {
+		clusters = append(clusters, "moderate_similarity")
+	} else {
+		clusters = append(clusters, "low_similarity")
+	}
+
+	// Check for sparsity
+	nonZero := 0
+	for _, v := range vector {
+		if v != 0 {
+			nonZero++
+		}
+	}
+	sparsity := float64(nonZero) / float64(len(vector))
+
+	if sparsity > 0.8 {
+		clusters = append(clusters, "dense_features")
+	} else if sparsity < 0.3 {
+		clusters = append(clusters, "sparse_features")
+	}
+
+	return clusters
+}
+
+// calculateVectorConfidence calculates confidence score for vector search results
+func (bkb *BedrockKnowledgeBaseService) calculateVectorConfidence(vectorScore float64, featureCount int) float64 {
+	// Base confidence from vector similarity
+	baseConfidence := vectorScore
+
+	// Boost confidence based on number of matched features
+	featureBoost := float64(featureCount) * 0.05
+	if featureBoost > 0.2 {
+		featureBoost = 0.2 // Cap at 20% boost
+	}
+
+	confidence := baseConfidence + featureBoost
+
+	// Normalize to 0-1 range
+	if confidence > 1.0 {
+		confidence = 1.0
+	}
+	if confidence < 0.0 {
+		confidence = 0.0
+	}
+
+	return confidence
+}
+
+// convertKnowledgeBaseResultsToBedrockResults converts Bedrock Knowledge Base results to BedrockSearchResult
+func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResults(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]dto.BedrockSearchResult, error) {
+	bedrockResults := make([]dto.BedrockSearchResult, 0, len(results))
+
+	for _, result := range results {
+		productID, err := bkb.parseKnowledgeBaseDocument(aws.ToString(result.Content.Text))
+		if err != nil {
+			log.Printf("Warning: Failed to parse product from content: %v", err)
+			continue
+		}
+
+		// Extract metadata from result
+		metadata := make(map[string]interface{})
+		if result.Metadata != nil {
+			for k, v := range result.Metadata {
+				metadata[k] = v
+			}
+		}
+
+		// Extract source information
+		source := ""
+		if result.Location != nil && result.Location.S3Location != nil {
+			source = aws.ToString(result.Location.S3Location.Uri)
+		}
+
+		bedrockResults = append(bedrockResults, dto.BedrockSearchResult{
+			ProductID:       productID,
+			DistanceScore:   float64(aws.ToFloat64(result.Score)),
+			SimilarityScore: float64(aws.ToFloat64(result.Score)),
+			SearchMethod:    searchMethod,
+			Metadata:        metadata,
+			Source:          source,
+		})
+	}
+
+	return bedrockResults, nil
+}
+
+// rankBedrockResultsByScore ranks BedrockSearchResult by their similarity scores
+func (bkb *BedrockKnowledgeBaseService) rankBedrockResultsByScore(results []dto.BedrockSearchResult) []dto.BedrockSearchResult {
+	// Sort results by similarity score in descending order
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].SimilarityScore > results[j].SimilarityScore
+	})
+
+	return results
+}
+
+// applyPostRetrievalFiltersToBedrockResults applies additional filters after retrieval
+func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResults(results []dto.BedrockSearchResult, filters map[string]interface{}) []dto.BedrockSearchResult {
+	filtered := make([]dto.BedrockSearchResult, 0, len(results))
+
+	for _, result := range results {
+		include := true
+
+		// Apply exclusion filter (exclude specific product ID)
+		if excludeID, ok := filters["exclude_id"].(string); ok {
+			if result.ProductID.String() == excludeID {
+				include = false
+			}
+		}
+
+		// Apply minimum score filter
+		if minScore, ok := filters["min_score"].(float64); ok && result.SimilarityScore < minScore {
+			include = false
+		}
+
+		// Apply maximum results filter
+		if maxResults, ok := filters["max_results"].(int); ok && len(filtered) >= maxResults {
+			break
+		}
+
+		if include {
+			filtered = append(filtered, result)
+		}
+	}
+
+	return filtered
+}
+
+// applyHybridRankingToBedrockResults applies hybrid ranking algorithm to combine vector and semantic scores
+func (bkb *BedrockKnowledgeBaseService) applyHybridRankingToBedrockResults(results []dto.BedrockSearchResult, vector []float64, query string, knowledgeResults []types.KnowledgeBaseRetrievalResult) []dto.BedrockSearchResult {
+	// Apply hybrid ranking algorithm to Bedrock search results
+	hybridResults := make([]dto.BedrockSearchResult, 0, len(results))
+
+	for i, result := range results {
+		hybridResult := dto.BedrockSearchResult{
+			ProductID:       result.ProductID,
+			DistanceScore:   result.DistanceScore,
+			SimilarityScore: result.SimilarityScore,
+			SearchMethod:    result.SearchMethod,
+			Metadata:        result.Metadata,
+			Source:          result.Source,
+		}
+
+		// Apply hybrid ranking algorithm to Bedrock search results
+		hybridResult.SimilarityScore = bkb.calculateHybridRankingScore(result.SimilarityScore, vector, query, knowledgeResults[i])
+		hybridResult.DistanceScore = hybridResult.SimilarityScore
+
+		hybridResults = append(hybridResults, hybridResult)
+	}
+
+	// Sort hybrid results by similarity score in descending order
+	sort.Slice(hybridResults, func(i, j int) bool {
+		return hybridResults[i].SimilarityScore > hybridResults[j].SimilarityScore
+	})
+
+	return hybridResults
+}
+
+// calculateHybridRankingScore calculates hybrid ranking score
+func (bkb *BedrockKnowledgeBaseService) calculateHybridRankingScore(vectorScore float64, vector []float64, query string, knowledgeResult types.KnowledgeBaseRetrievalResult) float64 {
+	// Calculate hybrid ranking score
+	hybridScore := vectorScore
+
+	// Apply hybrid ranking algorithm to Bedrock search results
+	hybridScore += bkb.calculateHybridRankingScoreFromKnowledge(knowledgeResult, vector, query)
+
+	return hybridScore
+}
+
+// calculateHybridRankingScoreFromKnowledge calculates hybrid ranking score from knowledge result
+func (bkb *BedrockKnowledgeBaseService) calculateHybridRankingScoreFromKnowledge(knowledgeResult types.KnowledgeBaseRetrievalResult, vector []float64, query string) float64 {
+	// Calculate hybrid ranking score from knowledge result
+	knowledgeScore := float64(aws.ToFloat64(knowledgeResult.Score))
+
+	// Apply hybrid ranking algorithm to Bedrock search results
+	hybridScore := knowledgeScore
+
+	return hybridScore
+}
+
+// calculateSemanticRelevanceForBedrock calculates semantic relevance score for Bedrock search results
+func (bkb *BedrockKnowledgeBaseService) calculateSemanticRelevanceForBedrock(result dto.BedrockSearchResult, query string) float64 {
+	// Calculate semantic relevance score for Bedrock search results
+	productText := strings.ToLower(result.Source)
+	queryTerms := strings.Fields(strings.ToLower(query))
+
+	matches := 0
+	for _, term := range queryTerms {
+		if strings.Contains(productText, term) {
+			matches++
+		}
+	}
+
+	if len(queryTerms) == 0 {
+		return 0.0
+	}
+
+	return float64(matches) / float64(len(queryTerms))
+}
+
+// finalHybridRankingForBedrock performs final ranking and selection for hybrid search
+func (bkb *BedrockKnowledgeBaseService) finalHybridRankingForBedrock(results []dto.BedrockSearchResult, limit int) []dto.BedrockSearchResult {
+	// Apply diversity algorithm to ensure varied results
+	diversified := bkb.applyDiversityAlgorithmForBedrock(results, limit)
+
+	// Final confidence adjustment based on ranking position
+	for i := range diversified {
+		positionBonus := 1.0 - (float64(i) * 0.05) // Slight bonus for higher positions
+		if positionBonus < 0.5 {
+			positionBonus = 0.5
+		}
+		diversified[i].ConfidenceScore *= positionBonus
+	}
+
+	return diversified
+}
+
+// applyDiversityAlgorithmForBedrock applies diversity algorithm to ensure varied results
+func (bkb *BedrockKnowledgeBaseService) applyDiversityAlgorithmForBedrock(results []dto.BedrockSearchResult, limit int) []dto.BedrockSearchResult {
+	if len(results) <= limit {
+		return results
+	}
+
+	// Simple diversity algorithm - ensure product diversity by source
+	sourceMap := make(map[string]bool)
+	diversified := make([]dto.BedrockSearchResult, 0, limit)
+
+	// First pass: include top products from different sources
+	for _, result := range results {
+		if len(diversified) >= limit {
+			break
+		}
+		source := result.Source
+		if source == "" {
+			source = result.ProductID.String()[:8] // Use first 8 chars of UUID as fallback
+		}
+		if !sourceMap[source] {
+			sourceMap[source] = true
+			diversified = append(diversified, result)
+		}
+	}
+
+	// Second pass: fill remaining slots with highest scoring products
+	for _, result := range results {
+		if len(diversified) >= limit {
+			break
+		}
+		// Check if product is already included
+		found := false
+		for _, included := range diversified {
+			if included.ProductID == result.ProductID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			diversified = append(diversified, result)
+		}
+	}
+
+	return diversified
 }

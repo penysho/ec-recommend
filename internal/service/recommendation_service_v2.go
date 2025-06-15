@@ -187,9 +187,15 @@ func (rs *RecommendationServiceV2) SemanticSearch(ctx context.Context, req *dto.
 	}
 
 	// Perform semantic search using Bedrock Knowledge Base
-	results, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
+	bedrockResponse, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform semantic search: %w", err)
+	}
+
+	// Convert Bedrock results to ProductRecommendationV2
+	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "semantic_search")
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
 
 	// Log semantic search
@@ -244,9 +250,15 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 	filters := make(map[string]interface{})
 	filters["exclude_id"] = req.ProductID.String()
 
-	similarProducts, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	bedrockResponse, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
+	}
+
+	// Convert Bedrock results to ProductRecommendationV2
+	similarProducts, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "vector_search")
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
 
 	// Enhance with vector metadata
@@ -256,6 +268,9 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 		}
 		similarProducts[i].VectorMetadata.SearchMethod = "vector_similarity"
 		similarProducts[i].VectorMetadata.EmbeddingModel = rs.embeddingModelID
+		if similarProducts[i].Reason == "" {
+			similarProducts[i].Reason = fmt.Sprintf("Similar to product: %s", targetProduct.Name)
+		}
 	}
 
 	processingTime := time.Since(startTime).Milliseconds()
@@ -443,9 +458,15 @@ func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.C
 	filters := rs.buildPersonalizedFilters(profile, req)
 
 	// Perform semantic search using Bedrock Knowledge Base
-	results, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
+	bedrockResponse, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to perform semantic search: %w", err)
+	}
+
+	// Convert Bedrock results to ProductRecommendationV2
+	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "semantic_search")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
 
 	// Generate semantic insights
@@ -481,9 +502,15 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 	filters["exclude_id"] = req.ProductID.String()
 
 	// Perform vector search using Bedrock Knowledge Base
-	results, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	bedrockResponse, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
+	}
+
+	// Convert Bedrock results to ProductRecommendationV2
+	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "vector_search")
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
 
 	metrics.VectorSearchTimeMs = time.Since(startTime).Milliseconds()
@@ -831,10 +858,37 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 			filters := rs.buildPersonalizedFilters(profile, &dto.RecommendationRequestV2{})
 			semanticResults, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
 			if err == nil {
-				// Enhance semantic results with KB reasoning
-				for _, product := range semanticResults {
-					product.Reason = fmt.Sprintf("Based on knowledge base insights: %s", searchQuery)
-					recommendations = append(recommendations, product)
+				// Extract product IDs from semantic search results
+				productIDs := make([]uuid.UUID, len(semanticResults.Results))
+				for i, result := range semanticResults.Results {
+					productIDs[i] = result.ProductID
+				}
+
+				// Get full product details from repository
+				fullProducts, err := rs.repo.GetProductsByIDs(ctx, productIDs)
+				if err == nil {
+					// Create a map for quick lookup of full product details
+					productMap := make(map[uuid.UUID]dto.ProductRecommendationV2)
+					for _, product := range fullProducts {
+						productMap[product.ProductID] = product
+					}
+
+					// Enhance semantic results with full product information and KB reasoning
+					for _, semanticResult := range semanticResults.Results {
+						if fullProduct, exists := productMap[semanticResult.ProductID]; exists {
+							// Copy semantic metadata and scores to the full product
+							fullProduct.VectorMetadata = &dto.VectorMetadata{
+								DistanceScore:   semanticResult.DistanceScore,
+								SearchMethod:    semanticResult.SearchMethod,
+								MatchedCriteria: semanticResult.MatchedCriteria,
+								EmbeddingModel:  semanticResult.EmbeddingModel,
+							}
+							fullProduct.SimilarityScore = semanticResult.SimilarityScore
+							fullProduct.ConfidenceScore = semanticResult.ConfidenceScore
+							fullProduct.Reason = fmt.Sprintf("Based on knowledge base insights: %s", searchQuery)
+							recommendations = append(recommendations, fullProduct)
+						}
+					}
 				}
 			}
 		}
@@ -1333,4 +1387,62 @@ func (rs *RecommendationServiceV2) extractUUIDsWithRegex(content string) []uuid.
 	}
 
 	return productIDs
+}
+
+// convertBedrockResultsToProducts converts Bedrock search results to ProductRecommendationV2
+func (rs *RecommendationServiceV2) convertBedrockResultsToProducts(ctx context.Context, bedrockResults []dto.BedrockSearchResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
+	if len(bedrockResults) == 0 {
+		return []dto.ProductRecommendationV2{}, nil
+	}
+
+	// Extract product IDs from Bedrock search results
+	productIDs := make([]uuid.UUID, len(bedrockResults))
+	for i, result := range bedrockResults {
+		productIDs[i] = result.ProductID
+	}
+
+	// Get full product details from repository
+	fullProducts, err := rs.repo.GetProductsByIDs(ctx, productIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get full product details: %w", err)
+	}
+
+	// Create a map for quick lookup of full product details
+	productMap := make(map[uuid.UUID]dto.ProductRecommendationV2)
+	for _, product := range fullProducts {
+		productMap[product.ProductID] = product
+	}
+
+	// Enhance Bedrock results with full product information
+	results := make([]dto.ProductRecommendationV2, 0, len(bedrockResults))
+	for _, bedrockResult := range bedrockResults {
+		if fullProduct, exists := productMap[bedrockResult.ProductID]; exists {
+			// Copy Bedrock metadata and scores to the full product
+			fullProduct.VectorMetadata = &dto.VectorMetadata{
+				DistanceScore:    bedrockResult.DistanceScore,
+				SearchMethod:     bedrockResult.SearchMethod,
+				MatchedCriteria:  bedrockResult.MatchedCriteria,
+				EmbeddingModel:   bedrockResult.EmbeddingModel,
+				SemanticClusters: bedrockResult.SemanticClusters,
+			}
+			fullProduct.SimilarityScore = bedrockResult.SimilarityScore
+			fullProduct.ConfidenceScore = bedrockResult.ConfidenceScore
+
+			// Set appropriate reason based on search method
+			switch searchMethod {
+			case "vector_search":
+				fullProduct.Reason = "Similar to your selected product based on vector analysis"
+			case "semantic_search":
+				fullProduct.Reason = "Matches your search query based on semantic understanding"
+			case "hybrid_search":
+				fullProduct.Reason = "Recommended based on both similarity and semantic relevance"
+			default:
+				fullProduct.Reason = fmt.Sprintf("Recommended using %s", searchMethod)
+			}
+
+			results = append(results, fullProduct)
+		}
+	}
+
+	return results, nil
 }

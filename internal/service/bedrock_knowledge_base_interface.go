@@ -21,9 +21,9 @@ type BedrockKnowledgeBaseInterface interface {
 	GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*SimilarDocumentsResponse, error)
 
 	// Product search methods using Bedrock Knowledge Base
-	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
-	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
-	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
+	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockVectorSearchResponse, error)
+	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*dto.BedrockSemanticSearchResponse, error)
+	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockHybridSearchResponse, error)
 }
 
 // BedrockKnowledgeBaseResponse represents the response from knowledge base query
