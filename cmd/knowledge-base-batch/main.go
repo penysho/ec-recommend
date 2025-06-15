@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,13 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"ec-recommend/internal/repository/db/models"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	_ "github.com/lib/pq"
 	"github.com/volatiletech/sqlboiler/v4/queries/qm"
-
-	"ec-recommend/internal/repository/models"
 )
 
 type Config struct {
