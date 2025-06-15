@@ -69,18 +69,16 @@ func (rs *RecommendationServiceV2) GetRecommendationsV2(ctx context.Context, req
 
 	// Generate recommendations based on type
 	switch req.RecommendationType {
-	case "semantic":
-		if req.QueryText == "" {
-			return nil, fmt.Errorf("query_text is required for semantic recommendations")
-		}
+	case "semantic", "vector_search":
+		// Both semantic and vector_search now use the same underlying semantic search with automatic vectorization
+		// semantic: uses query_text directly
+		// vector_search: generates query from product_id and uses semantic search for similarity
 		recommendations, semanticInsights, queryUnderstanding, err = rs.generateSemanticRecommendations(ctx, req, profile, performanceMetrics)
-		searchStrategies = append(searchStrategies, "semantic_search")
-	case "vector_search":
-		if req.ProductID == nil {
-			return nil, fmt.Errorf("product_id is required for vector search recommendations")
+		if req.RecommendationType == "semantic" {
+			searchStrategies = append(searchStrategies, "semantic_search")
+		} else {
+			searchStrategies = append(searchStrategies, "vector_similarity")
 		}
-		recommendations, err = rs.generateVectorRecommendations(ctx, req, profile, performanceMetrics)
-		searchStrategies = append(searchStrategies, "vector_similarity")
 	case "knowledge_based":
 		recommendations, err = rs.generateKnowledgeBasedRecommendations(ctx, req, profile, performanceMetrics)
 		searchStrategies = append(searchStrategies, "knowledge_base_rag")
@@ -89,7 +87,7 @@ func (rs *RecommendationServiceV2) GetRecommendationsV2(ctx context.Context, req
 		searchStrategies = append(searchStrategies, "collaborative_filtering")
 	case "hybrid":
 		recommendations, semanticInsights, queryUnderstanding, err = rs.generateHybridRecommendations(ctx, req, profile, performanceMetrics)
-		searchStrategies = append(searchStrategies, "hybrid_rag", "vector_search", "collaborative_filtering")
+		searchStrategies = append(searchStrategies, "hybrid_rag", "semantic_search", "collaborative_filtering")
 	default:
 		return nil, fmt.Errorf("unsupported recommendation type: %s", req.RecommendationType)
 	}
@@ -224,11 +222,13 @@ func (rs *RecommendationServiceV2) SemanticSearch(ctx context.Context, req *dto.
 	}, nil
 }
 
-// GetVectorSimilarProducts finds products similar to a given product using vector similarity
+// GetVectorSimilarProducts finds products similar to a given product using semantic similarity
+// This method now leverages AWS Bedrock Knowledge Base's automatic vectorization capabilities
+// instead of manually generating and passing vector embeddings
 func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context, req *dto.VectorSimilarityRequest) (*dto.VectorSimilarityResponse, error) {
 	startTime := time.Now()
 
-	// Get product embedding vector
+	// Get target product details
 	products, err := rs.repo.GetProductsByIDs(ctx, []uuid.UUID{req.ProductID})
 	if err != nil || len(products) == 0 {
 		return nil, fmt.Errorf("failed to get target product: %w", err)
@@ -236,38 +236,47 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 
 	targetProduct := products[0]
 
-	// Generate comprehensive embedding for the target product using enhanced product representation
+	// Build comprehensive product description for semantic search
+	// The Knowledge Base will automatically convert this to vectors internally
 	comprehensiveProductText := rs.buildComprehensiveProductText(targetProduct)
-	log.Printf("Enhanced vector embedding text for product %s: %s", targetProduct.ProductID, comprehensiveProductText)
-	embedding, err := rs.rag.GetVectorEmbedding(ctx, comprehensiveProductText)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate embedding: %w", err)
-	}
 
-	// Perform vector search
+	// Create similarity query using product characteristics
+	similarityQuery := fmt.Sprintf("Find products similar to: %s", comprehensiveProductText)
+
+	log.Printf("Using semantic search for product similarity - Target: %s, Query: %s",
+		targetProduct.ProductID, similarityQuery)
+
+	// Set up filters to exclude the target product
 	filters := make(map[string]interface{})
 	filters["exclude_id"] = req.ProductID.String()
 
-	ragResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	// Use enhanced semantic search which automatically handles vectorization
+	ragResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, similarityQuery, req.Limit, filters)
 	if err != nil {
-		return nil, fmt.Errorf("failed to perform vector search: %w", err)
+		return nil, fmt.Errorf("failed to perform semantic similarity search: %w", err)
 	}
 
 	// Convert RAG results to ProductRecommendationV2
-	similarProducts, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "vector_search")
+	similarProducts, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "semantic_similarity")
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
+		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
 
-	// Enhance with vector metadata
+	// Enhance with semantic similarity metadata
 	for i := range similarProducts {
 		if similarProducts[i].VectorMetadata == nil {
 			similarProducts[i].VectorMetadata = &dto.VectorMetadata{}
 		}
-		similarProducts[i].VectorMetadata.SearchMethod = "vector_similarity"
+		similarProducts[i].VectorMetadata.SearchMethod = "semantic_similarity"
 		similarProducts[i].VectorMetadata.EmbeddingModel = rs.embeddingModelID
 		if similarProducts[i].Reason == "" {
-			similarProducts[i].Reason = fmt.Sprintf("Similar to product: %s", targetProduct.Name)
+			similarProducts[i].Reason = fmt.Sprintf("Semantically similar to: %s", targetProduct.Name)
+		}
+
+		// Add additional similarity context
+		if len(ragResponse.Results) > i {
+			similarProducts[i].SimilarityScore = ragResponse.Results[i].SimilarityScore
+			similarProducts[i].ConfidenceScore = ragResponse.Results[i].ConfidenceScore
 		}
 	}
 
@@ -279,7 +288,7 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 		TotalFound:       len(similarProducts),
 		ProcessingTimeMs: processingTime,
 		VectorMetadata: &dto.VectorMetadata{
-			SearchMethod:   "vector_similarity",
+			SearchMethod:   "semantic_similarity_enhanced",
 			EmbeddingModel: rs.embeddingModelID,
 		},
 	}, nil
@@ -446,75 +455,76 @@ func (rs *RecommendationServiceV2) LogRecommendationInteraction(ctx context.Cont
 func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.Context, req *dto.RecommendationRequestV2, profile *dto.CustomerProfile, metrics *dto.PerformanceMetrics) ([]dto.ProductRecommendationV2, *dto.SemanticInsights, *dto.QueryUnderstanding, error) {
 	startTime := time.Now()
 
-	// Analyze query for better understanding
-	queryUnderstanding, err := rs.analyzeQuery(ctx, req.QueryText)
-	if err != nil {
-		log.Printf("Warning: failed to analyze query: %v", err)
+	var queryText string
+	var searchMethod string
+	var queryUnderstanding *dto.QueryUnderstanding
+
+	// Determine query text and search method based on request type
+	if req.RecommendationType == "vector_search" {
+		// For vector_search, validate product_id and generate query from product
+		if req.ProductID == nil {
+			return nil, nil, nil, fmt.Errorf("product_id is required for vector search recommendations")
+		}
+
+		// Get target product and generate similarity query
+		products, err := rs.repo.GetProductsByIDs(ctx, []uuid.UUID{*req.ProductID})
+		if err != nil || len(products) == 0 {
+			return nil, nil, nil, fmt.Errorf("failed to get target product: %w", err)
+		}
+
+		targetProduct := products[0]
+		comprehensiveProductText := rs.buildComprehensiveProductText(targetProduct)
+		queryText = fmt.Sprintf("Find products similar to: %s", comprehensiveProductText)
+		searchMethod = "semantic_similarity"
+
+		log.Printf("Using semantic search for vector recommendations - Target: %s, Query: %s",
+			targetProduct.ProductID, queryText)
+	} else {
+		// For semantic search, validate query_text
+		if req.QueryText == "" {
+			return nil, nil, nil, fmt.Errorf("query_text is required for semantic recommendations")
+		}
+
+		queryText = req.QueryText
+		searchMethod = "semantic_search"
+
+		// Analyze query for better understanding
+		var err error
+		queryUnderstanding, err = rs.analyzeQuery(ctx, req.QueryText)
+		if err != nil {
+			log.Printf("Warning: failed to analyze query: %v", err)
+		}
 	}
 
 	// Build personalized filters based on customer profile
 	filters := rs.buildPersonalizedFilters(profile, req)
 
-	// Perform semantic search using RAG Knowledge Base
-	ragResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
+	// For vector_search, exclude the target product
+	if req.RecommendationType == "vector_search" && req.ProductID != nil {
+		filters["exclude_id"] = req.ProductID.String()
+	}
+
+	// Perform semantic search using RAG Knowledge Base (handles both semantic and vector similarity)
+	ragResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, queryText, req.Limit*2, filters)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
 
 	// Convert RAG results to ProductRecommendationV2
-	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "semantic_search")
+	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, searchMethod)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
 
-	// Generate semantic insights
-	semanticInsights := rs.generateSemanticInsights(results, queryUnderstanding)
+	// Generate semantic insights (only for semantic search with actual query)
+	var semanticInsights *dto.SemanticInsights
+	if req.RecommendationType == "semantic" && queryUnderstanding != nil {
+		semanticInsights = rs.generateSemanticInsights(results, queryUnderstanding)
+	}
 
 	metrics.VectorSearchTimeMs = time.Since(startTime).Milliseconds()
 
 	return results, semanticInsights, queryUnderstanding, nil
-}
-
-func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Context, req *dto.RecommendationRequestV2, profile *dto.CustomerProfile, metrics *dto.PerformanceMetrics) ([]dto.ProductRecommendationV2, error) {
-	startTime := time.Now()
-
-	// Get target product
-	products, err := rs.repo.GetProductsByIDs(ctx, []uuid.UUID{*req.ProductID})
-	if err != nil || len(products) == 0 {
-		return nil, fmt.Errorf("failed to get target product: %w", err)
-	}
-
-	targetProduct := products[0]
-
-	// Generate embedding using comprehensive product representation
-	embeddingStartTime := time.Now()
-	comprehensiveProductText := rs.buildComprehensiveProductText(targetProduct)
-	log.Printf("Enhanced vector embedding text for product %s: %s", targetProduct.ProductID, comprehensiveProductText)
-	embedding, err := rs.rag.GetVectorEmbedding(ctx, comprehensiveProductText)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate embedding: %w", err)
-	}
-	metrics.EmbeddingGenerationMs = time.Since(embeddingStartTime).Milliseconds()
-
-	// Build filters
-	filters := rs.buildPersonalizedFilters(profile, req)
-	filters["exclude_id"] = req.ProductID.String()
-
-	// Perform vector search using RAG Knowledge Base
-	ragResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
-	if err != nil {
-		return nil, fmt.Errorf("failed to perform vector search: %w", err)
-	}
-
-	// Convert RAG results to ProductRecommendationV2
-	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "vector_search")
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
-	}
-
-	metrics.VectorSearchTimeMs = time.Since(startTime).Milliseconds()
-
-	return results, nil
 }
 
 func (rs *RecommendationServiceV2) generateKnowledgeBasedRecommendations(ctx context.Context, req *dto.RecommendationRequestV2, profile *dto.CustomerProfile, metrics *dto.PerformanceMetrics) ([]dto.ProductRecommendationV2, error) {
@@ -572,7 +582,10 @@ func (rs *RecommendationServiceV2) generateHybridRecommendations(ctx context.Con
 
 	// 1. Semantic search (40% weight) if query provided
 	if req.QueryText != "" {
-		semanticRecs, insights, understanding, err := rs.generateSemanticRecommendations(ctx, req, profile, metrics)
+		// Create a copy of the request for semantic search
+		semanticReq := *req
+		semanticReq.RecommendationType = "semantic"
+		semanticRecs, insights, understanding, err := rs.generateSemanticRecommendations(ctx, &semanticReq, profile, metrics)
 		if err == nil {
 			for i := range semanticRecs {
 				semanticRecs[i].ConfidenceScore = semanticRecs[i].ConfidenceScore * 0.4
@@ -585,7 +598,10 @@ func (rs *RecommendationServiceV2) generateHybridRecommendations(ctx context.Con
 
 	// 2. Vector search (30% weight) if product ID provided
 	if req.ProductID != nil {
-		vectorRecs, err := rs.generateVectorRecommendations(ctx, req, profile, metrics)
+		// Create a copy of the request for vector search
+		vectorReq := *req
+		vectorReq.RecommendationType = "vector_search"
+		vectorRecs, _, _, err := rs.generateSemanticRecommendations(ctx, &vectorReq, profile, metrics)
 		if err == nil {
 			for i := range vectorRecs {
 				vectorRecs[i].ConfidenceScore = vectorRecs[i].ConfidenceScore * 0.3

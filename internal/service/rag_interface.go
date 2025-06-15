@@ -22,9 +22,9 @@ type RAGInterface interface {
 	GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*SimilarDocumentsResponse, error)
 
 	// Product search methods using RAG
-	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*RAGVectorSearchResponse, error)
+	// GetProductsWithSemanticSearch now handles semantic, vector similarity, and hybrid search automatically
+	// through Knowledge Base's built-in vectorization and hybrid search capabilities
 	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*RAGSemanticSearchResponse, error)
-	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*RAGHybridSearchResponse, error)
 }
 
 // RAGResponse represents the response from RAG query
@@ -215,27 +215,9 @@ type RAGSearchResult struct {
 	RetrievalRank    int                    `json:"retrieval_rank"`
 }
 
-// RAGVectorSearchResponse represents the response from vector search
-type RAGVectorSearchResponse struct {
-	Results          []RAGSearchResult `json:"results"`
-	TotalFound       int               `json:"total_found"`
-	ProcessingTimeMs int64             `json:"processing_time_ms"`
-	SearchMetadata   *RAGSearchMeta    `json:"search_metadata"`
-}
-
 // RAGSemanticSearchResponse represents the response from semantic search
 type RAGSemanticSearchResponse struct {
 	Query            string            `json:"query"`
-	Results          []RAGSearchResult `json:"results"`
-	TotalFound       int               `json:"total_found"`
-	ProcessingTimeMs int64             `json:"processing_time_ms"`
-	SearchMetadata   *RAGSearchMeta    `json:"search_metadata"`
-}
-
-// RAGHybridSearchResponse represents the response from hybrid search
-type RAGHybridSearchResponse struct {
-	Query            string            `json:"query"`
-	Vector           []float64         `json:"vector,omitempty"`
 	Results          []RAGSearchResult `json:"results"`
 	TotalFound       int               `json:"total_found"`
 	ProcessingTimeMs int64             `json:"processing_time_ms"`
