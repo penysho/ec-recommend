@@ -13,7 +13,8 @@ import (
 
 	"ec-recommend/internal/config"
 	"ec-recommend/internal/handler"
-	"ec-recommend/internal/repository"
+	bedrockRepository "ec-recommend/internal/repository/bedrock"
+	dbRepository "ec-recommend/internal/repository/db"
 	"ec-recommend/internal/router"
 	"ec-recommend/internal/service"
 
@@ -65,63 +66,22 @@ func main() {
 	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
 	bedrockAgentClient := bedrockagentruntime.NewFromConfig(awsCfg)
 
-	// Initialize V1 services
-	bedrockService := service.NewBedrockClient(bedrockClient, cfg.BedrockModelID)
-
-	// Initialize repositories
-	recommendationRepo := repository.NewRecommendationRepository(db)
+	// Initialize V1 repositories
+	bedrockRepo := bedrockRepository.NewBedrockClient(bedrockClient, cfg.BedrockModelID)
+	recommendationRepo := dbRepository.NewRecommendationRepository(db)
 
 	// Initialize V1 recommendation service
-	recommendationService := service.NewRecommendationService(recommendationRepo, bedrockService, cfg.BedrockModelID)
+	recommendationService := service.NewRecommendationService(recommendationRepo, bedrockRepo, cfg.BedrockModelID)
+
+	// Initialize V2 repositories
+	recommendationRepoV2 := dbRepository.NewRecommendationRepositoryV2(db)
+	bedrockRepoV2 := bedrockRepository.NewBedrockKnowledgeBaseService(bedrockAgentClient, bedrockClient, cfg.KnowledgeBaseID, cfg.BedrockModelID, cfg.EmbeddingModelID)
 
 	// Initialize V2 services (Enhanced RAG-based)
-	var bedrockKnowledgeBaseService *service.BedrockKnowledgeBaseService
-	var openSearchVectorService *service.OpenSearchVectorService
-	var recommendationServiceV2 *service.RecommendationServiceV2
-
-	recommendationRepoV2 := repository.NewRecommendationRepositoryV2(db)
-
-	// Initialize Bedrock Knowledge Base service if configured
-	if cfg.KnowledgeBaseID != "" {
-		bedrockKnowledgeBaseService = service.NewBedrockKnowledgeBaseService(
-			bedrockAgentClient,
-			bedrockClient,
-			cfg.KnowledgeBaseID,
-			cfg.BedrockModelID,
-			cfg.EmbeddingModelID,
-		)
-		log.Printf("Initialized Bedrock Knowledge Base service with ID: %s", cfg.KnowledgeBaseID)
-	} else {
-		log.Println("Warning: KNOWLEDGE_BASE_ID not configured, V2 Knowledge Base features will be limited")
-	}
-
-	// Initialize OpenSearch Vector service if configured
-	if cfg.OpenSearchEndpoint != "" {
-		// Use AWS credentials from the config
-		credentials := awsCfg.Credentials
-		openSearchVectorService = service.NewOpenSearchVectorService(
-			cfg.OpenSearchEndpoint,
-			cfg.AWSRegion,
-			credentials,
-		)
-		log.Printf("Initialized OpenSearch Vector service with endpoint: %s", cfg.OpenSearchEndpoint)
-	} else {
-		log.Println("Warning: OPENSEARCH_ENDPOINT not configured, V2 vector search features will be limited")
-	}
-
-	// Initialize V2 recommendation service
-	recommendationServiceV2 = service.NewRecommendationServiceV2(
-		recommendationRepoV2,
-		bedrockKnowledgeBaseService,
-		openSearchVectorService,
-		bedrockService,
-		cfg.BedrockModelID,
-		cfg.KnowledgeBaseID,
-		cfg.EmbeddingModelID,
-	)
+	recommendationServiceV2 := service.NewRecommendationServiceV2(recommendationRepoV2, bedrockRepoV2, bedrockRepo, cfg.BedrockModelID, cfg.KnowledgeBaseID, cfg.EmbeddingModelID)
 
 	// Initialize handlers
-	chatHandler := handler.NewChatHandler(bedrockService)
+	chatHandler := handler.NewChatHandler(bedrockRepo)
 	healthHandler := handler.NewHealthHandler()
 	recommendationHandler := handler.NewRecommendationHandler(recommendationService)
 	recommendationHandlerV2 := handler.NewRecommendationHandlerV2(recommendationServiceV2)

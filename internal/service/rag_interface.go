@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
-	"ec-recommend/internal/dto"
+
+	"github.com/google/uuid"
 )
 
-// BedrockKnowledgeBaseInterface defines the interface for Amazon Bedrock Knowledge Base operations
+// RAGInterface defines the interface for RAG operations
 // This interface is defined in the service package as it is consumed by services
-type BedrockKnowledgeBaseInterface interface {
+type RAGInterface interface {
 	// QueryKnowledgeBase performs a query against the knowledge base
-	QueryKnowledgeBase(ctx context.Context, query string, filters map[string]interface{}) (*BedrockKnowledgeBaseResponse, error)
+	QueryKnowledgeBase(ctx context.Context, query string, filters map[string]interface{}) (*RAGResponse, error)
 
 	// RetrieveAndGenerate performs retrieval-augmented generation
 	RetrieveAndGenerate(ctx context.Context, req *RetrieveAndGenerateRequest) (*RetrieveAndGenerateResponse, error)
@@ -20,14 +21,14 @@ type BedrockKnowledgeBaseInterface interface {
 	// GetSimilarDocuments finds similar documents based on vector similarity
 	GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*SimilarDocumentsResponse, error)
 
-	// Product search methods using Bedrock Knowledge Base
-	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockVectorSearchResponse, error)
-	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*dto.BedrockSemanticSearchResponse, error)
-	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockHybridSearchResponse, error)
+	// Product search methods using RAG
+	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*RAGVectorSearchResponse, error)
+	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*RAGSemanticSearchResponse, error)
+	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*RAGHybridSearchResponse, error)
 }
 
-// BedrockKnowledgeBaseResponse represents the response from knowledge base query
-type BedrockKnowledgeBaseResponse struct {
+// RAGResponse represents the response from RAG query
+type RAGResponse struct {
 	Results           []KnowledgeBaseResult `json:"results"`
 	RetrievalMetadata *RetrievalMetadata    `json:"retrieval_metadata,omitempty"`
 	ProcessingTimeMs  int64                 `json:"processing_time_ms"`
@@ -197,4 +198,58 @@ type SimilarDocument struct {
 	Score      float64                `json:"score"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 	Source     string                 `json:"source,omitempty"`
+}
+
+// RAGSearchResult represents a search result from RAG Knowledge Base
+type RAGSearchResult struct {
+	ProductID        uuid.UUID              `json:"product_id"`
+	DistanceScore    float64                `json:"distance_score"`
+	SimilarityScore  float64                `json:"similarity_score"`
+	ConfidenceScore  float64                `json:"confidence_score"`
+	SearchMethod     string                 `json:"search_method"`
+	EmbeddingModel   string                 `json:"embedding_model"`
+	MatchedCriteria  []string               `json:"matched_criteria"`
+	SemanticClusters []string               `json:"semantic_clusters"`
+	Metadata         map[string]interface{} `json:"metadata"`
+	Source           string                 `json:"source"`
+	RetrievalRank    int                    `json:"retrieval_rank"`
+}
+
+// RAGVectorSearchResponse represents the response from vector search
+type RAGVectorSearchResponse struct {
+	Results          []RAGSearchResult `json:"results"`
+	TotalFound       int               `json:"total_found"`
+	ProcessingTimeMs int64             `json:"processing_time_ms"`
+	SearchMetadata   *RAGSearchMeta    `json:"search_metadata"`
+}
+
+// RAGSemanticSearchResponse represents the response from semantic search
+type RAGSemanticSearchResponse struct {
+	Query            string            `json:"query"`
+	Results          []RAGSearchResult `json:"results"`
+	TotalFound       int               `json:"total_found"`
+	ProcessingTimeMs int64             `json:"processing_time_ms"`
+	SearchMetadata   *RAGSearchMeta    `json:"search_metadata"`
+}
+
+// RAGHybridSearchResponse represents the response from hybrid search
+type RAGHybridSearchResponse struct {
+	Query            string            `json:"query"`
+	Vector           []float64         `json:"vector,omitempty"`
+	Results          []RAGSearchResult `json:"results"`
+	TotalFound       int               `json:"total_found"`
+	ProcessingTimeMs int64             `json:"processing_time_ms"`
+	SearchMetadata   *RAGSearchMeta    `json:"search_metadata"`
+}
+
+// RAGSearchMeta contains metadata about the search operation
+type RAGSearchMeta struct {
+	SearchType         string                 `json:"search_type"`
+	EmbeddingModel     string                 `json:"embedding_model"`
+	KnowledgeBaseID    string                 `json:"knowledge_base_id"`
+	SimilarityMetric   string                 `json:"similarity_metric"`
+	FiltersApplied     map[string]interface{} `json:"filters_applied"`
+	RerankerUsed       bool                   `json:"reranker_used"`
+	CacheUsed          bool                   `json:"cache_used"`
+	HybridSearchWeight map[string]float64     `json:"hybrid_search_weight,omitempty"`
 }

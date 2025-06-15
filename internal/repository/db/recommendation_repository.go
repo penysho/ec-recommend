@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"ec-recommend/internal/dto"
-	"ec-recommend/internal/repository/models"
+	"ec-recommend/internal/repository/db/models"
 	"fmt"
 	"time"
 

@@ -16,8 +16,7 @@ import (
 // RecommendationServiceV2 implements the RecommendationServiceV2Interface with RAG and vector search capabilities
 type RecommendationServiceV2 struct {
 	repo             RecommendationRepositoryV2Interface
-	bedrockKB        BedrockKnowledgeBaseInterface
-	openSearchVector OpenSearchVectorInterface
+	rag              RAGInterface
 	chatService      ChatServiceInterface
 	modelID          string
 	knowledgeBaseID  string
@@ -27,15 +26,13 @@ type RecommendationServiceV2 struct {
 // NewRecommendationServiceV2 creates a new enhanced recommendation service instance
 func NewRecommendationServiceV2(
 	repo RecommendationRepositoryV2Interface,
-	bedrockKB BedrockKnowledgeBaseInterface,
-	openSearchVector OpenSearchVectorInterface,
+	rag RAGInterface,
 	chatService ChatServiceInterface,
 	modelID, knowledgeBaseID, embeddingModelID string,
 ) *RecommendationServiceV2 {
 	return &RecommendationServiceV2{
 		repo:             repo,
-		bedrockKB:        bedrockKB,
-		openSearchVector: openSearchVector,
+		rag:              rag,
 		chatService:      chatService,
 		modelID:          modelID,
 		knowledgeBaseID:  knowledgeBaseID,
@@ -187,7 +184,7 @@ func (rs *RecommendationServiceV2) SemanticSearch(ctx context.Context, req *dto.
 	}
 
 	// Perform semantic search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
+	bedrockResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
@@ -241,7 +238,7 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 
 	// Generate embedding for the target product
 	productDescription := fmt.Sprintf("%s %s", targetProduct.Name, targetProduct.Description)
-	embedding, err := rs.bedrockKB.GetVectorEmbedding(ctx, productDescription)
+	embedding, err := rs.rag.GetVectorEmbedding(ctx, productDescription)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -250,7 +247,7 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 	filters := make(map[string]interface{})
 	filters["exclude_id"] = req.ProductID.String()
 
-	bedrockResponse, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	bedrockResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
@@ -301,7 +298,7 @@ func (rs *RecommendationServiceV2) GetKnowledgeBasedRecommendations(ctx context.
 	query := rs.createKnowledgeBasedQuery(profile, req.Intent, req.ContextDescription)
 
 	// Query knowledge base
-	kbResponse, err := rs.bedrockKB.QueryKnowledgeBase(ctx, query, nil)
+	kbResponse, err := rs.rag.QueryKnowledgeBase(ctx, query, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query knowledge base: %w", err)
 	}
@@ -458,7 +455,7 @@ func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.C
 	filters := rs.buildPersonalizedFilters(profile, req)
 
 	// Perform semantic search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
+	bedrockResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
@@ -491,7 +488,7 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 	// Generate embedding
 	embeddingStartTime := time.Now()
 	productDescription := fmt.Sprintf("%s %s", targetProduct.Name, targetProduct.Description)
-	embedding, err := rs.bedrockKB.GetVectorEmbedding(ctx, productDescription)
+	embedding, err := rs.rag.GetVectorEmbedding(ctx, productDescription)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -502,7 +499,7 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 	filters["exclude_id"] = req.ProductID.String()
 
 	// Perform vector search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	bedrockResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
@@ -525,7 +522,7 @@ func (rs *RecommendationServiceV2) generateKnowledgeBasedRecommendations(ctx con
 	query := rs.createComprehensiveQuery(profile, req.ContextType)
 
 	// Query knowledge base
-	kbResponse, err := rs.bedrockKB.QueryKnowledgeBase(ctx, query, nil)
+	kbResponse, err := rs.rag.QueryKnowledgeBase(ctx, query, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query knowledge base: %w", err)
 	}
@@ -794,7 +791,7 @@ Please provide detailed product recommendations that match this customer's prefe
 	)
 }
 
-func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Context, kbResponse *BedrockKnowledgeBaseResponse, profile *dto.CustomerProfile, limit int) ([]dto.ProductRecommendationV2, []dto.ReasoningStep, error) {
+func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Context, kbResponse *RAGResponse, profile *dto.CustomerProfile, limit int) ([]dto.ProductRecommendationV2, []dto.ReasoningStep, error) {
 	recommendations := make([]dto.ProductRecommendationV2, 0)
 	reasoningChain := make([]dto.ReasoningStep, 0)
 	extractedProductIDs := make([]uuid.UUID, 0)
@@ -856,7 +853,7 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 		searchQuery := rs.extractKeyTermsFromText(kbResponse.Results[0].Content)
 		if searchQuery != "" {
 			filters := rs.buildPersonalizedFilters(profile, &dto.RecommendationRequestV2{})
-			semanticResults, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
+			semanticResults, err := rs.rag.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
 			if err == nil {
 				// Extract product IDs from semantic search results
 				productIDs := make([]uuid.UUID, len(semanticResults.Results))
@@ -908,7 +905,7 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 	return recommendations, reasoningChain, nil
 }
 
-func (rs *RecommendationServiceV2) createKnowledgeInsights(kbResponse *BedrockKnowledgeBaseResponse) *dto.KnowledgeInsights {
+func (rs *RecommendationServiceV2) createKnowledgeInsights(kbResponse *RAGResponse) *dto.KnowledgeInsights {
 	insights := &dto.KnowledgeInsights{
 		ConfidenceLevel: 0.8,
 		RelatedConcepts: make(map[string]float64),
@@ -1390,7 +1387,7 @@ func (rs *RecommendationServiceV2) extractUUIDsWithRegex(content string) []uuid.
 }
 
 // convertBedrockResultsToProducts converts Bedrock search results to ProductRecommendationV2
-func (rs *RecommendationServiceV2) convertBedrockResultsToProducts(ctx context.Context, bedrockResults []dto.BedrockSearchResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
+func (rs *RecommendationServiceV2) convertBedrockResultsToProducts(ctx context.Context, bedrockResults []RAGSearchResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
 	if len(bedrockResults) == 0 {
 		return []dto.ProductRecommendationV2{}, nil
 	}

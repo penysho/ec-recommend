@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"ec-recommend/internal/dto"
+	"ec-recommend/internal/service"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -42,7 +42,7 @@ func NewBedrockKnowledgeBaseService(
 }
 
 // QueryKnowledgeBase performs a query against the knowledge base with advanced features
-func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, query string, filters map[string]interface{}) (*BedrockKnowledgeBaseResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, query string, filters map[string]interface{}) (*service.RAGResponse, error) {
 	startTime := time.Now()
 
 	// Build basic retrieval configuration
@@ -67,11 +67,11 @@ func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, 
 	}
 
 	// Convert results to our interface format
-	results := make([]KnowledgeBaseResult, 0, len(retrieveOutput.RetrievalResults))
+	results := make([]service.KnowledgeBaseResult, 0, len(retrieveOutput.RetrievalResults))
 	sources := make([]string, 0)
 
 	for _, result := range retrieveOutput.RetrievalResults {
-		kbResult := KnowledgeBaseResult{
+		kbResult := service.KnowledgeBaseResult{
 			Content: aws.ToString(result.Content.Text),
 			Score:   float64(aws.ToFloat64(result.Score)),
 		}
@@ -95,7 +95,7 @@ func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, 
 
 		// Add location information
 		if result.Location != nil {
-			kbResult.Location = &DocumentLocation{
+			kbResult.Location = &service.DocumentLocation{
 				DocumentID: extractDocumentIDFromURI(kbResult.Source),
 			}
 		}
@@ -108,9 +108,9 @@ func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, 
 	// Calculate confidence level based on scores
 	confidenceLevel := bkb.calculateConfidenceLevel(results)
 
-	return &BedrockKnowledgeBaseResponse{
+	return &service.RAGResponse{
 		Results: results,
-		RetrievalMetadata: &RetrievalMetadata{
+		RetrievalMetadata: &service.RetrievalMetadata{
 			QueryProcessingTimeMs: processingTime,
 			RetrievalCount:        len(results),
 			Sources:               bkb.deduplicateSources(sources),
@@ -121,7 +121,7 @@ func (bkb *BedrockKnowledgeBaseService) QueryKnowledgeBase(ctx context.Context, 
 }
 
 // RetrieveAndGenerate performs retrieval-augmented generation with basic configuration
-func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context, req *RetrieveAndGenerateRequest) (*RetrieveAndGenerateResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context, req *service.RetrieveAndGenerateRequest) (*service.RetrieveAndGenerateResponse, error) {
 	// Build basic retrieval configuration
 	retrievalConfig := &types.RetrieveAndGenerateConfiguration{
 		Type: types.RetrieveAndGenerateTypeKnowledgeBase,
@@ -146,18 +146,18 @@ func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context,
 	}
 
 	// Process citations from retrieved sources
-	citations := make([]Citation, 0)
-	retrievedResults := make([]KnowledgeBaseResult, 0)
+	citations := make([]service.Citation, 0)
+	retrievedResults := make([]service.KnowledgeBaseResult, 0)
 
 	if ragOutput.Citations != nil {
 		for _, citation := range ragOutput.Citations {
 			// Process each citation
 			if citation.GeneratedResponsePart != nil && citation.GeneratedResponsePart.TextResponsePart != nil {
-				citationObj := Citation{
-					GeneratedResponsePart: &GeneratedResponsePart{
-						TextResponsePart: &TextResponsePart{
+				citationObj := service.Citation{
+					GeneratedResponsePart: &service.GeneratedResponsePart{
+						TextResponsePart: &service.TextResponsePart{
 							Text: aws.ToString(citation.GeneratedResponsePart.TextResponsePart.Text),
-							Span: &Span{
+							Span: &service.Span{
 								Start: int(aws.ToInt32(citation.GeneratedResponsePart.TextResponsePart.Span.Start)),
 								End:   int(aws.ToInt32(citation.GeneratedResponsePart.TextResponsePart.Span.End)),
 							},
@@ -167,19 +167,19 @@ func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context,
 
 				// Process retrieved references
 				if citation.RetrievedReferences != nil {
-					references := make([]RetrievedReference, 0, len(citation.RetrievedReferences))
+					references := make([]service.RetrievedReference, 0, len(citation.RetrievedReferences))
 					for _, ref := range citation.RetrievedReferences {
-						reference := RetrievedReference{
-							Content: &RetrievalResultContent{
+						reference := service.RetrievedReference{
+							Content: &service.RetrievalResultContent{
 								Text: aws.ToString(ref.Content.Text),
 							},
 						}
 
 						// Add location information
 						if ref.Location != nil {
-							reference.Location = &RetrievalResultLocation{}
+							reference.Location = &service.RetrievalResultLocation{}
 							if ref.Location.S3Location != nil {
-								reference.Location.S3Location = &S3Location{
+								reference.Location.S3Location = &service.S3Location{
 									URI: aws.ToString(ref.Location.S3Location.Uri),
 								}
 							}
@@ -197,14 +197,14 @@ func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context,
 						references = append(references, reference)
 
 						// Also add to retrieved results for compatibility
-						retrievedResult := KnowledgeBaseResult{
+						retrievedResult := service.KnowledgeBaseResult{
 							Content: aws.ToString(ref.Content.Text),
 							Score:   0.0, // Score not available in citations
 						}
 
 						if ref.Location != nil && ref.Location.S3Location != nil {
 							retrievedResult.Source = aws.ToString(ref.Location.S3Location.Uri)
-							retrievedResult.Location = &DocumentLocation{
+							retrievedResult.Location = &service.DocumentLocation{
 								DocumentID: extractDocumentIDFromURI(retrievedResult.Source),
 							}
 						}
@@ -227,11 +227,11 @@ func (bkb *BedrockKnowledgeBaseService) RetrieveAndGenerate(ctx context.Context,
 		}
 	}
 
-	return &RetrieveAndGenerateResponse{
+	return &service.RetrieveAndGenerateResponse{
 		Output:           aws.ToString(ragOutput.Output.Text),
 		Citations:        citations,
 		RetrievedResults: retrievedResults,
-		Metadata: &GenerationMetadata{
+		Metadata: &service.GenerationMetadata{
 			ModelID:          extractModelIDFromARN(req.ModelARN),
 			ProcessingTimeMs: time.Since(time.Now()).Milliseconds(),
 		},
@@ -275,7 +275,7 @@ func (bkb *BedrockKnowledgeBaseService) GetVectorEmbedding(ctx context.Context, 
 }
 
 // GetSimilarDocuments finds similar documents based on vector similarity
-func (bkb *BedrockKnowledgeBaseService) GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*SimilarDocumentsResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*service.SimilarDocumentsResponse, error) {
 	startTime := time.Now()
 
 	// Use the knowledge base for similarity search
@@ -288,14 +288,14 @@ func (bkb *BedrockKnowledgeBaseService) GetSimilarDocuments(ctx context.Context,
 	}
 
 	// Convert knowledge base results to similar documents
-	documents := make([]SimilarDocument, 0, len(kbResponse.Results))
+	documents := make([]service.SimilarDocument, 0, len(kbResponse.Results))
 
 	// Limit results
 	maxResults := min(len(kbResponse.Results), limit)
 	for i := 0; i < maxResults; i++ {
 		result := kbResponse.Results[i]
 
-		doc := SimilarDocument{
+		doc := service.SimilarDocument{
 			DocumentID: result.Location.DocumentID,
 			Content:    result.Content,
 			Score:      result.Score,
@@ -306,7 +306,7 @@ func (bkb *BedrockKnowledgeBaseService) GetSimilarDocuments(ctx context.Context,
 		documents = append(documents, doc)
 	}
 
-	return &SimilarDocumentsResponse{
+	return &service.SimilarDocumentsResponse{
 		Documents:        documents,
 		ProcessingTimeMs: time.Since(startTime).Milliseconds(),
 	}, nil
@@ -314,7 +314,7 @@ func (bkb *BedrockKnowledgeBaseService) GetSimilarDocuments(ctx context.Context,
 
 // Helper functions
 
-func (bkb *BedrockKnowledgeBaseService) calculateConfidenceLevel(results []KnowledgeBaseResult) float64 {
+func (bkb *BedrockKnowledgeBaseService) calculateConfidenceLevel(results []service.KnowledgeBaseResult) float64 {
 	if len(results) == 0 {
 		return 0.0
 	}
@@ -379,7 +379,7 @@ func extractModelIDFromARN(arn string) string {
 }
 
 // GetProductsWithVectorSearch performs vector-based product search using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockVectorSearchResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*service.RAGVectorSearchResponse, error) {
 	startTime := time.Now()
 
 	// Step 1: Analyze the input vector to extract semantic features
@@ -412,7 +412,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 		return nil, fmt.Errorf("failed to retrieve products with vector search: %w", err)
 	}
 
-	// Step 4: Convert results to BedrockSearchResult
+	// Step 4: Convert results to service.RAGSearchResult
 	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "vector_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
@@ -465,11 +465,11 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 	log.Printf("Vector search completed: %d results in %dms with %d-dimensional vector",
 		len(results), processingTime, len(vector))
 
-	return &dto.BedrockVectorSearchResponse{
+	return &service.RAGVectorSearchResponse{
 		Results:          results,
 		TotalFound:       len(results),
 		ProcessingTimeMs: processingTime,
-		SearchMetadata: &dto.BedrockSearchMeta{
+		SearchMetadata: &service.RAGSearchMeta{
 			SearchType:       "vector_search",
 			EmbeddingModel:   bkb.embeddingModelID,
 			KnowledgeBaseID:  bkb.knowledgeBaseID,
@@ -482,7 +482,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 }
 
 // GetProductsWithSemanticSearch performs semantic/text-based product search using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*dto.BedrockSemanticSearchResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) (*service.RAGSemanticSearchResponse, error) {
 	startTime := time.Now()
 
 	// Enhance query with context for better semantic understanding
@@ -510,7 +510,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx contex
 		return nil, fmt.Errorf("failed to retrieve products with semantic search: %w", err)
 	}
 
-	// Convert results to BedrockSearchResult
+	// Convert results to service.RAGSearchResult
 	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "semantic_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
@@ -538,12 +538,12 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx contex
 	processingTime := time.Since(startTime).Milliseconds()
 	log.Printf("Semantic search completed: %d results in %dms for query: %s", len(results), processingTime, query)
 
-	return &dto.BedrockSemanticSearchResponse{
+	return &service.RAGSemanticSearchResponse{
 		Query:            query,
 		Results:          results[:min(len(results), limit)],
 		TotalFound:       len(results),
 		ProcessingTimeMs: processingTime,
-		SearchMetadata: &dto.BedrockSearchMeta{
+		SearchMetadata: &service.RAGSearchMeta{
 			SearchType:       "semantic_search",
 			EmbeddingModel:   bkb.embeddingModelID,
 			KnowledgeBaseID:  bkb.knowledgeBaseID,
@@ -556,7 +556,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx contex
 }
 
 // GetProductsWithHybridSearch performs hybrid search combining vector and semantic approaches using Amazon Bedrock Knowledge Base
-func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*dto.BedrockHybridSearchResponse, error) {
+func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) (*service.RAGHybridSearchResponse, error) {
 	startTime := time.Now()
 
 	// Enhance query for hybrid search context
@@ -583,7 +583,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.
 		return nil, fmt.Errorf("failed to retrieve products with hybrid search: %w", err)
 	}
 
-	// Convert results to BedrockSearchResult
+	// Convert results to service.RAGSearchResult
 	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "hybrid_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hybrid search results: %w", err)
@@ -621,13 +621,13 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.
 	processingTime := time.Since(startTime).Milliseconds()
 	log.Printf("Hybrid search completed: %d results in %dms for query: %s", len(results), processingTime, query)
 
-	return &dto.BedrockHybridSearchResponse{
+	return &service.RAGHybridSearchResponse{
 		Query:            query,
 		Vector:           vector,
 		Results:          results[:min(len(results), limit)],
 		TotalFound:       len(results),
 		ProcessingTimeMs: processingTime,
-		SearchMetadata: &dto.BedrockSearchMeta{
+		SearchMetadata: &service.RAGSearchMeta{
 			SearchType:         "hybrid_search",
 			EmbeddingModel:     bkb.embeddingModelID,
 			KnowledgeBaseID:    bkb.knowledgeBaseID,
@@ -1090,9 +1090,9 @@ func (bkb *BedrockKnowledgeBaseService) calculateVectorConfidence(vectorScore fl
 	return confidence
 }
 
-// convertKnowledgeBaseResultsToBedrockResults converts Bedrock Knowledge Base results to BedrockSearchResult
-func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResults(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]dto.BedrockSearchResult, error) {
-	bedrockResults := make([]dto.BedrockSearchResult, 0, len(results))
+// convertKnowledgeBaseResultsToBedrockResults converts Bedrock Knowledge Base results to service.RAGSearchResult
+func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResults(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]service.RAGSearchResult, error) {
+	bedrockResults := make([]service.RAGSearchResult, 0, len(results))
 
 	for _, result := range results {
 		productID, err := bkb.parseKnowledgeBaseDocument(aws.ToString(result.Content.Text))
@@ -1115,7 +1115,7 @@ func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResu
 			source = aws.ToString(result.Location.S3Location.Uri)
 		}
 
-		bedrockResults = append(bedrockResults, dto.BedrockSearchResult{
+		bedrockResults = append(bedrockResults, service.RAGSearchResult{
 			ProductID:       productID,
 			DistanceScore:   float64(aws.ToFloat64(result.Score)),
 			SimilarityScore: float64(aws.ToFloat64(result.Score)),
@@ -1128,8 +1128,8 @@ func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResu
 	return bedrockResults, nil
 }
 
-// rankBedrockResultsByScore ranks BedrockSearchResult by their similarity scores
-func (bkb *BedrockKnowledgeBaseService) rankBedrockResultsByScore(results []dto.BedrockSearchResult) []dto.BedrockSearchResult {
+// rankBedrockResultsByScore ranks service.RAGSearchResult by their similarity scores
+func (bkb *BedrockKnowledgeBaseService) rankBedrockResultsByScore(results []service.RAGSearchResult) []service.RAGSearchResult {
 	// Sort results by similarity score in descending order
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].SimilarityScore > results[j].SimilarityScore
@@ -1139,8 +1139,8 @@ func (bkb *BedrockKnowledgeBaseService) rankBedrockResultsByScore(results []dto.
 }
 
 // applyPostRetrievalFiltersToBedrockResults applies additional filters after retrieval
-func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResults(results []dto.BedrockSearchResult, filters map[string]interface{}) []dto.BedrockSearchResult {
-	filtered := make([]dto.BedrockSearchResult, 0, len(results))
+func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResults(results []service.RAGSearchResult, filters map[string]interface{}) []service.RAGSearchResult {
+	filtered := make([]service.RAGSearchResult, 0, len(results))
 
 	for _, result := range results {
 		include := true
@@ -1171,12 +1171,12 @@ func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResult
 }
 
 // applyHybridRankingToBedrockResults applies hybrid ranking algorithm to combine vector and semantic scores
-func (bkb *BedrockKnowledgeBaseService) applyHybridRankingToBedrockResults(results []dto.BedrockSearchResult, vector []float64, query string, knowledgeResults []types.KnowledgeBaseRetrievalResult) []dto.BedrockSearchResult {
+func (bkb *BedrockKnowledgeBaseService) applyHybridRankingToBedrockResults(results []service.RAGSearchResult, vector []float64, query string, knowledgeResults []types.KnowledgeBaseRetrievalResult) []service.RAGSearchResult {
 	// Apply hybrid ranking algorithm to Bedrock search results
-	hybridResults := make([]dto.BedrockSearchResult, 0, len(results))
+	hybridResults := make([]service.RAGSearchResult, 0, len(results))
 
 	for i, result := range results {
-		hybridResult := dto.BedrockSearchResult{
+		hybridResult := service.RAGSearchResult{
 			ProductID:       result.ProductID,
 			DistanceScore:   result.DistanceScore,
 			SimilarityScore: result.SimilarityScore,
@@ -1223,7 +1223,7 @@ func (bkb *BedrockKnowledgeBaseService) calculateHybridRankingScoreFromKnowledge
 }
 
 // calculateSemanticRelevanceForBedrock calculates semantic relevance score for Bedrock search results
-func (bkb *BedrockKnowledgeBaseService) calculateSemanticRelevanceForBedrock(result dto.BedrockSearchResult, query string) float64 {
+func (bkb *BedrockKnowledgeBaseService) calculateSemanticRelevanceForBedrock(result service.RAGSearchResult, query string) float64 {
 	// Calculate semantic relevance score for Bedrock search results
 	productText := strings.ToLower(result.Source)
 	queryTerms := strings.Fields(strings.ToLower(query))
@@ -1243,7 +1243,7 @@ func (bkb *BedrockKnowledgeBaseService) calculateSemanticRelevanceForBedrock(res
 }
 
 // finalHybridRankingForBedrock performs final ranking and selection for hybrid search
-func (bkb *BedrockKnowledgeBaseService) finalHybridRankingForBedrock(results []dto.BedrockSearchResult, limit int) []dto.BedrockSearchResult {
+func (bkb *BedrockKnowledgeBaseService) finalHybridRankingForBedrock(results []service.RAGSearchResult, limit int) []service.RAGSearchResult {
 	// Apply diversity algorithm to ensure varied results
 	diversified := bkb.applyDiversityAlgorithmForBedrock(results, limit)
 
@@ -1260,14 +1260,14 @@ func (bkb *BedrockKnowledgeBaseService) finalHybridRankingForBedrock(results []d
 }
 
 // applyDiversityAlgorithmForBedrock applies diversity algorithm to ensure varied results
-func (bkb *BedrockKnowledgeBaseService) applyDiversityAlgorithmForBedrock(results []dto.BedrockSearchResult, limit int) []dto.BedrockSearchResult {
+func (bkb *BedrockKnowledgeBaseService) applyDiversityAlgorithmForBedrock(results []service.RAGSearchResult, limit int) []service.RAGSearchResult {
 	if len(results) <= limit {
 		return results
 	}
 
 	// Simple diversity algorithm - ensure product diversity by source
 	sourceMap := make(map[string]bool)
-	diversified := make([]dto.BedrockSearchResult, 0, limit)
+	diversified := make([]service.RAGSearchResult, 0, limit)
 
 	// First pass: include top products from different sources
 	for _, result := range results {
