@@ -236,9 +236,10 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 
 	targetProduct := products[0]
 
-	// Generate embedding for the target product
-	productDescription := fmt.Sprintf("%s %s", targetProduct.Name, targetProduct.Description)
-	embedding, err := rs.rag.GetVectorEmbedding(ctx, productDescription)
+	// Generate comprehensive embedding for the target product using enhanced product representation
+	comprehensiveProductText := rs.buildComprehensiveProductText(targetProduct)
+	log.Printf("Enhanced vector embedding text for product %s: %s", targetProduct.ProductID, comprehensiveProductText)
+	embedding, err := rs.rag.GetVectorEmbedding(ctx, comprehensiveProductText)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -485,10 +486,11 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 
 	targetProduct := products[0]
 
-	// Generate embedding
+	// Generate embedding using comprehensive product representation
 	embeddingStartTime := time.Now()
-	productDescription := fmt.Sprintf("%s %s", targetProduct.Name, targetProduct.Description)
-	embedding, err := rs.rag.GetVectorEmbedding(ctx, productDescription)
+	comprehensiveProductText := rs.buildComprehensiveProductText(targetProduct)
+	log.Printf("Enhanced vector embedding text for product %s: %s", targetProduct.ProductID, comprehensiveProductText)
+	embedding, err := rs.rag.GetVectorEmbedding(ctx, comprehensiveProductText)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -1442,4 +1444,199 @@ func (rs *RecommendationServiceV2) convertRAGResultsToProducts(ctx context.Conte
 	}
 
 	return results, nil
+}
+
+// buildComprehensiveProductText creates a comprehensive text representation of a product for vector embedding
+func (rs *RecommendationServiceV2) buildComprehensiveProductText(product dto.ProductRecommendationV2) string {
+	var textComponents []string
+
+	// Primary product information (highest weight)
+	textComponents = append(textComponents, fmt.Sprintf("Product: %s", product.Name))
+	if product.Description != "" {
+		textComponents = append(textComponents, fmt.Sprintf("Description: %s", product.Description))
+	}
+
+	// Category and brand information (high weight)
+	if product.CategoryName != "" {
+		textComponents = append(textComponents, fmt.Sprintf("Category: %s", product.CategoryName))
+	}
+	if product.Brand != "" {
+		textComponents = append(textComponents, fmt.Sprintf("Brand: %s", product.Brand))
+	}
+
+	// Price information with semantic context
+	priceCategory := rs.categorizePriceRange(product.Price)
+	textComponents = append(textComponents, fmt.Sprintf("Price Range: %s", priceCategory))
+
+	// Add price discount information if available
+	if product.OriginalPrice != nil && *product.OriginalPrice > product.Price {
+		discountPercent := ((*product.OriginalPrice - product.Price) / *product.OriginalPrice) * 100
+		discountCategory := rs.categorizeDiscount(discountPercent)
+		textComponents = append(textComponents, fmt.Sprintf("Discount: %s", discountCategory))
+	}
+
+	// Tags and keywords (medium weight)
+	if len(product.Tags) > 0 {
+		textComponents = append(textComponents, fmt.Sprintf("Tags: %s", strings.Join(product.Tags, ", ")))
+	}
+
+	// Quality and popularity indicators (medium weight)
+	if product.RatingAverage > 0 {
+		ratingCategory := rs.categorizeRating(product.RatingAverage)
+		textComponents = append(textComponents, fmt.Sprintf("Quality: %s", ratingCategory))
+
+		// Add review volume context for quality assessment
+		if product.RatingCount > 0 {
+			reviewVolumeCategory := rs.categorizeReviewVolume(product.RatingCount)
+			textComponents = append(textComponents, fmt.Sprintf("Review Volume: %s", reviewVolumeCategory))
+		}
+	}
+
+	if product.PopularityScore > 0 {
+		popularityCategory := rs.categorizePopularity(product.PopularityScore)
+		textComponents = append(textComponents, fmt.Sprintf("Popularity: %s", popularityCategory))
+	}
+
+	// AI insights for enhanced context (if available)
+	if product.AIInsights != nil {
+		if len(product.AIInsights.KeyFeatures) > 0 {
+			textComponents = append(textComponents, fmt.Sprintf("Key Features: %s", strings.Join(product.AIInsights.KeyFeatures, ", ")))
+		}
+		if len(product.AIInsights.UseCases) > 0 {
+			textComponents = append(textComponents, fmt.Sprintf("Use Cases: %s", strings.Join(product.AIInsights.UseCases, ", ")))
+		}
+		if len(product.AIInsights.TargetAudience) > 0 {
+			textComponents = append(textComponents, fmt.Sprintf("Target Audience: %s", strings.Join(product.AIInsights.TargetAudience, ", ")))
+		}
+
+		// Add sentiment analysis if available
+		if product.AIInsights.SentimentAnalysis != nil {
+			sentiment := product.AIInsights.SentimentAnalysis
+			textComponents = append(textComponents, fmt.Sprintf("Customer Sentiment: %s", sentiment.OverallSentiment))
+			if len(sentiment.KeyTopics) > 0 {
+				textComponents = append(textComponents, fmt.Sprintf("Review Topics: %s", strings.Join(sentiment.KeyTopics, ", ")))
+			}
+		}
+
+		// Add trend information if available
+		if product.AIInsights.TrendAnalysis != nil {
+			trend := product.AIInsights.TrendAnalysis
+			textComponents = append(textComponents, fmt.Sprintf("Market Trend: %s %s", trend.TrendDirection, trend.MarketPosition))
+			if trend.SeasonalPattern != "" {
+				textComponents = append(textComponents, fmt.Sprintf("Seasonal Pattern: %s", trend.SeasonalPattern))
+			}
+		}
+	}
+
+	// Add seasonal context based on current time
+	seasonalContext := rs.getCurrentSeasonalContext()
+	if seasonalContext != "" {
+		textComponents = append(textComponents, fmt.Sprintf("Seasonal Context: %s", seasonalContext))
+	}
+
+	// Join all components with structured separators for better embedding understanding
+	return strings.Join(textComponents, ". ")
+}
+
+// categorizePriceRange converts numerical price to categorical range for better semantic understanding
+func (rs *RecommendationServiceV2) categorizePriceRange(price float64) string {
+	switch {
+	case price < 10:
+		return "budget low-cost affordable"
+	case price < 50:
+		return "budget moderate affordable"
+	case price < 100:
+		return "mid-range affordable quality"
+	case price < 300:
+		return "mid-range quality premium"
+	case price < 1000:
+		return "premium high-quality expensive"
+	default:
+		return "luxury premium high-end expensive"
+	}
+}
+
+// categorizeRating converts numerical rating to categorical quality descriptor
+func (rs *RecommendationServiceV2) categorizeRating(rating float64) string {
+	switch {
+	case rating >= 4.5:
+		return "excellent highly-rated top-quality"
+	case rating >= 4.0:
+		return "very-good highly-rated quality"
+	case rating >= 3.5:
+		return "good rated decent-quality"
+	case rating >= 3.0:
+		return "average moderate-quality"
+	case rating >= 2.0:
+		return "below-average poor-quality"
+	default:
+		return "poor low-quality"
+	}
+}
+
+// categorizePopularity converts numerical popularity score to categorical descriptor
+func (rs *RecommendationServiceV2) categorizePopularity(popularity int) string {
+	switch {
+	case popularity >= 1000:
+		return "extremely-popular trending bestseller"
+	case popularity >= 500:
+		return "very-popular trending well-known"
+	case popularity >= 100:
+		return "popular well-known"
+	case popularity >= 50:
+		return "moderately-popular known"
+	default:
+		return "niche specialized emerging"
+	}
+}
+
+// categorizeDiscount converts discount percentage to semantic descriptor
+func (rs *RecommendationServiceV2) categorizeDiscount(discountPercent float64) string {
+	switch {
+	case discountPercent >= 50:
+		return "massive-discount clearance heavily-discounted"
+	case discountPercent >= 30:
+		return "major-discount significant-savings heavily-discounted"
+	case discountPercent >= 20:
+		return "good-discount discounted on-sale"
+	case discountPercent >= 10:
+		return "moderate-discount slightly-discounted on-sale"
+	default:
+		return "minor-discount small-savings"
+	}
+}
+
+// categorizeReviewVolume converts review count to reliability descriptor
+func (rs *RecommendationServiceV2) categorizeReviewVolume(reviewCount int) string {
+	switch {
+	case reviewCount >= 1000:
+		return "extensively-reviewed well-established trusted"
+	case reviewCount >= 500:
+		return "well-reviewed established reliable"
+	case reviewCount >= 100:
+		return "moderately-reviewed verified"
+	case reviewCount >= 10:
+		return "some-reviews emerging"
+	default:
+		return "few-reviews new-product"
+	}
+}
+
+// getCurrentSeasonalContext returns seasonal keywords based on current time
+func (rs *RecommendationServiceV2) getCurrentSeasonalContext() string {
+	now := time.Now()
+	month := now.Month()
+
+	switch {
+	case month >= 12 || month <= 2:
+		return "winter holiday-season cold-weather gift-giving"
+	case month >= 3 && month <= 5:
+		return "spring renewal fresh-start outdoor-activities"
+	case month >= 6 && month <= 8:
+		return "summer vacation hot-weather outdoor-recreation"
+	case month >= 9 && month <= 11:
+		return "autumn back-to-school harvest-season preparation"
+	default:
+		return ""
+	}
 }
