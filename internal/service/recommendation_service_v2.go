@@ -183,14 +183,14 @@ func (rs *RecommendationServiceV2) SemanticSearch(ctx context.Context, req *dto.
 		filters["price_max"] = *req.PriceRangeMax
 	}
 
-	// Perform semantic search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
+	// Perform semantic search using RAG Knowledge Base
+	ragResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
 
-	// Convert Bedrock results to ProductRecommendationV2
-	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "semantic_search")
+	// Convert RAG results to ProductRecommendationV2
+	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "semantic_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
@@ -247,13 +247,13 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 	filters := make(map[string]interface{})
 	filters["exclude_id"] = req.ProductID.String()
 
-	bedrockResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	ragResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
 
-	// Convert Bedrock results to ProductRecommendationV2
-	similarProducts, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "vector_search")
+	// Convert RAG results to ProductRecommendationV2
+	similarProducts, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "vector_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
@@ -454,14 +454,14 @@ func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.C
 	// Build personalized filters based on customer profile
 	filters := rs.buildPersonalizedFilters(profile, req)
 
-	// Perform semantic search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
+	// Perform semantic search using RAG Knowledge Base
+	ragResponse, err := rs.rag.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
 
-	// Convert Bedrock results to ProductRecommendationV2
-	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "semantic_search")
+	// Convert RAG results to ProductRecommendationV2
+	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "semantic_search")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
@@ -498,14 +498,14 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 	filters := rs.buildPersonalizedFilters(profile, req)
 	filters["exclude_id"] = req.ProductID.String()
 
-	// Perform vector search using Bedrock Knowledge Base
-	bedrockResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	// Perform vector search using RAG Knowledge Base
+	ragResponse, err := rs.rag.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
 
-	// Convert Bedrock results to ProductRecommendationV2
-	results, err := rs.convertBedrockResultsToProducts(ctx, bedrockResponse.Results, "vector_search")
+	// Convert RAG results to ProductRecommendationV2
+	results, err := rs.convertRAGResultsToProducts(ctx, ragResponse.Results, "vector_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
@@ -1386,15 +1386,15 @@ func (rs *RecommendationServiceV2) extractUUIDsWithRegex(content string) []uuid.
 	return productIDs
 }
 
-// convertBedrockResultsToProducts converts Bedrock search results to ProductRecommendationV2
-func (rs *RecommendationServiceV2) convertBedrockResultsToProducts(ctx context.Context, bedrockResults []RAGSearchResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
-	if len(bedrockResults) == 0 {
+// convertRAGResultsToProducts converts RAG search results to ProductRecommendationV2
+func (rs *RecommendationServiceV2) convertRAGResultsToProducts(ctx context.Context, ragResults []RAGSearchResult, searchMethod string) ([]dto.ProductRecommendationV2, error) {
+	if len(ragResults) == 0 {
 		return []dto.ProductRecommendationV2{}, nil
 	}
 
-	// Extract product IDs from Bedrock search results
-	productIDs := make([]uuid.UUID, len(bedrockResults))
-	for i, result := range bedrockResults {
+	// Extract product IDs from RAG search results
+	productIDs := make([]uuid.UUID, len(ragResults))
+	for i, result := range ragResults {
 		productIDs[i] = result.ProductID
 	}
 
@@ -1410,20 +1410,20 @@ func (rs *RecommendationServiceV2) convertBedrockResultsToProducts(ctx context.C
 		productMap[product.ProductID] = product
 	}
 
-	// Enhance Bedrock results with full product information
-	results := make([]dto.ProductRecommendationV2, 0, len(bedrockResults))
-	for _, bedrockResult := range bedrockResults {
-		if fullProduct, exists := productMap[bedrockResult.ProductID]; exists {
-			// Copy Bedrock metadata and scores to the full product
+	// Enhance RAG results with full product information
+	results := make([]dto.ProductRecommendationV2, 0, len(ragResults))
+	for _, ragResult := range ragResults {
+		if fullProduct, exists := productMap[ragResult.ProductID]; exists {
+			// Copy RAG metadata and scores to the full product
 			fullProduct.VectorMetadata = &dto.VectorMetadata{
-				DistanceScore:    bedrockResult.DistanceScore,
-				SearchMethod:     bedrockResult.SearchMethod,
-				MatchedCriteria:  bedrockResult.MatchedCriteria,
-				EmbeddingModel:   bedrockResult.EmbeddingModel,
-				SemanticClusters: bedrockResult.SemanticClusters,
+				DistanceScore:    ragResult.DistanceScore,
+				SearchMethod:     ragResult.SearchMethod,
+				MatchedCriteria:  ragResult.MatchedCriteria,
+				EmbeddingModel:   ragResult.EmbeddingModel,
+				SemanticClusters: ragResult.SemanticClusters,
 			}
-			fullProduct.SimilarityScore = bedrockResult.SimilarityScore
-			fullProduct.ConfidenceScore = bedrockResult.ConfidenceScore
+			fullProduct.SimilarityScore = ragResult.SimilarityScore
+			fullProduct.ConfidenceScore = ragResult.ConfidenceScore
 
 			// Set appropriate reason based on search method
 			switch searchMethod {

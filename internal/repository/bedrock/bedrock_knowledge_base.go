@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -378,7 +379,7 @@ func extractModelIDFromARN(arn string) string {
 	return arn
 }
 
-// GetProductsWithVectorSearch performs vector-based product search using Amazon Bedrock Knowledge Base
+// GetProductsWithVectorSearch performs vector-based product search using Amazon Bedrock Knowledge Base with enhanced ranking
 func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) (*service.RAGVectorSearchResponse, error) {
 	startTime := time.Now()
 
@@ -389,14 +390,17 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 		semanticFeatures = []string{"similar products"} // Fallback
 	}
 
-	// Step 2: Convert vector features to search query
+	// Step 2: Convert vector features to enhanced search query
 	vectorQuery := bkb.buildVectorBasedQuery(semanticFeatures, filters)
 
-	// Step 3: Perform initial retrieval with expanded result set for vector ranking
+	// Step 3: Optimized retrieval configuration with higher result count for better ranking
+	// Use more results for better reranking (up to 3x the requested limit or max 100)
+	retrievalLimit := min(limit*4, 100) // Increased from 3x to 4x for better selection
+
 	retrievalConfig := &types.KnowledgeBaseRetrievalConfiguration{
 		VectorSearchConfiguration: &types.KnowledgeBaseVectorSearchConfiguration{
-			NumberOfResults:    aws.Int32(int32(min(limit*3, 100))), // Get more results for vector ranking
-			OverrideSearchType: types.SearchTypeHybrid,              // Use hybrid search for better coverage
+			NumberOfResults:    aws.Int32(int32(retrievalLimit)),
+			OverrideSearchType: types.SearchTypeHybrid, // Keep hybrid for better coverage
 		},
 	}
 
@@ -413,69 +417,120 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithVectorSearch(ctx context.
 	}
 
 	// Step 4: Convert results to service.RAGSearchResult
-	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "vector_search")
+	results, err := bkb.convertKnowledgeBaseResultsToRAGResults(retrieveOutput.RetrievalResults, "vector_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert vector search results: %w", err)
 	}
 
-	// Step 5: Use Knowledge Base scores directly instead of recalculating
-	for i := range results {
-		if i < len(retrieveOutput.RetrievalResults) {
-			// Use the Knowledge Base score directly
-			kbScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
-			results[i].SimilarityScore = kbScore
-			results[i].DistanceScore = kbScore
+	// Step 5: Enhanced scoring with normalization
+	// First, normalize scores to handle Knowledge Base score variations
+	if len(results) > 0 {
+		maxScore := 0.0
+		minScore := 1.0
+
+		// Find score range for normalization
+		for i := range results {
+			if i < len(retrieveOutput.RetrievalResults) {
+				kbScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+				if kbScore > maxScore {
+					maxScore = kbScore
+				}
+				if kbScore < minScore {
+					minScore = kbScore
+				}
+			}
+		}
+
+		// Apply normalization if there's a meaningful range
+		scoreRange := maxScore - minScore
+		if scoreRange > 0.01 { // Only normalize if there's sufficient variation
+			for i := range results {
+				if i < len(retrieveOutput.RetrievalResults) {
+					kbScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+					// Normalize to 0-1 range and apply power transformation for better distribution
+					normalizedScore := (kbScore - minScore) / scoreRange
+					enhancedScore := math.Pow(normalizedScore, 0.8) // Slight compression to reduce extreme values
+
+					results[i].SimilarityScore = enhancedScore
+					results[i].DistanceScore = enhancedScore
+				}
+			}
+		} else {
+			// If minimal variation, use original scores
+			for i := range results {
+				if i < len(retrieveOutput.RetrievalResults) {
+					kbScore := float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
+					results[i].SimilarityScore = kbScore
+					results[i].DistanceScore = kbScore
+				}
+			}
 		}
 	}
 
-	// Step 6: Rank results by Knowledge Base similarity scores
-	results = bkb.rankBedrockResultsByScore(results)
+	// Step 6: Enhanced vector metadata and feature analysis
+	vectorClusters := bkb.extractVectorClusters(vector)
 
-	// Step 7: Enhance results with vector metadata
 	for i := range results {
 		if i < len(retrieveOutput.RetrievalResults) {
 			vectorScore := results[i].SimilarityScore
-			if vectorScore == 0 {
-				vectorScore = float64(aws.ToFloat64(retrieveOutput.RetrievalResults[i].Score))
-			}
+
+			// Enhanced confidence calculation
+			confidence := bkb.calculateVectorConfidence(vectorScore, len(semanticFeatures))
+
+			// Apply vector quality boosting based on clusters
+			qualityBoost := bkb.calculateVectorQualityBoost(vectorClusters, vectorScore)
+			confidence = math.Min(confidence+qualityBoost, 1.0)
 
 			results[i].DistanceScore = vectorScore
-			results[i].SearchMethod = "vector_search"
+			results[i].SearchMethod = "vector_search_enhanced"
 			results[i].MatchedCriteria = append([]string{"vector_similarity"}, semanticFeatures...)
 			results[i].EmbeddingModel = bkb.embeddingModelID
-			results[i].SemanticClusters = bkb.extractVectorClusters(vector)
+			results[i].SemanticClusters = vectorClusters
 			results[i].SimilarityScore = vectorScore
-			results[i].ConfidenceScore = bkb.calculateVectorConfidence(vectorScore, len(semanticFeatures))
+			results[i].ConfidenceScore = confidence
 			results[i].RetrievalRank = i + 1
 		}
 	}
 
-	// Step 8: Apply additional filtering if needed
+	// Step 7: Advanced reranking with multiple criteria
+	results = bkb.applyAdvancedReranking(results, vector, semanticFeatures)
+
+	// Step 8: Apply filters with enhanced logic
 	if len(filters) > 0 {
 		results = bkb.applyPostRetrievalFiltersToBedrockResults(results, filters)
 	}
 
-	// Step 9: Final selection and limit
+	// Step 9: Diversity enhancement to avoid too similar results
 	if len(results) > limit {
+		results = bkb.applyDiversityAlgorithmForBedrock(results, limit)
+	} else if len(results) > limit {
 		results = results[:limit]
 	}
 
-	// Log vector search operation
+	// Log enhanced vector search operation
 	processingTime := time.Since(startTime).Milliseconds()
-	log.Printf("Vector search completed: %d results in %dms with %d-dimensional vector",
-		len(results), processingTime, len(vector))
+	avgScore := 0.0
+	if len(results) > 0 {
+		for _, result := range results {
+			avgScore += result.SimilarityScore
+		}
+		avgScore /= float64(len(results))
+	}
+
+	log.Printf("Enhanced vector search completed: %d results in %dms with %d-dimensional vector (avg score: %.3f)",
+		len(results), processingTime, len(vector), avgScore)
 
 	return &service.RAGVectorSearchResponse{
 		Results:          results,
 		TotalFound:       len(results),
 		ProcessingTimeMs: processingTime,
 		SearchMetadata: &service.RAGSearchMeta{
-			SearchType:       "vector_search",
+			SearchType:       "vector_search_enhanced",
 			EmbeddingModel:   bkb.embeddingModelID,
 			KnowledgeBaseID:  bkb.knowledgeBaseID,
-			SimilarityMetric: "cosine",
+			SimilarityMetric: "cosine_enhanced",
 			FiltersApplied:   filters,
-			RerankerUsed:     false,
+			RerankerUsed:     true,
 			CacheUsed:        false,
 		},
 	}, nil
@@ -511,7 +566,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithSemanticSearch(ctx contex
 	}
 
 	// Convert results to service.RAGSearchResult
-	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "semantic_search")
+	results, err := bkb.convertKnowledgeBaseResultsToRAGResults(retrieveOutput.RetrievalResults, "semantic_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert semantic search results: %w", err)
 	}
@@ -584,7 +639,7 @@ func (bkb *BedrockKnowledgeBaseService) GetProductsWithHybridSearch(ctx context.
 	}
 
 	// Convert results to service.RAGSearchResult
-	results, err := bkb.convertKnowledgeBaseResultsToBedrockResults(retrieveOutput.RetrievalResults, "hybrid_search")
+	results, err := bkb.convertKnowledgeBaseResultsToRAGResults(retrieveOutput.RetrievalResults, "hybrid_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert hybrid search results: %w", err)
 	}
@@ -895,31 +950,73 @@ func (bkb *BedrockKnowledgeBaseService) calculateHybridConfidence(vectorScore, s
 	return hybridScore
 }
 
-// analyzeVectorForFeatures analyzes the input vector to extract semantic features using Claude
+// analyzeVectorForFeatures analyzes vector to extract enhanced semantic features
 func (bkb *BedrockKnowledgeBaseService) analyzeVectorForFeatures(ctx context.Context, vector []float64) ([]string, error) {
-	// Use Claude to analyze vector patterns and extract semantic features
-	// This is a simplified approach - convert vector to textual representation for analysis
+	if len(vector) == 0 {
+		return []string{"general_products"}, nil
+	}
 
-	// Calculate basic statistics from vector
-	var sum, max, min float64
-	max = vector[0]
-	min = vector[0]
+	var features []string
+
+	// Statistical analysis
+	var sum, sumSquares float64
+	var max, min float64 = vector[0], vector[0]
+	nonZero := 0
 
 	for _, v := range vector {
 		sum += v
+		sumSquares += v * v
 		if v > max {
 			max = v
 		}
 		if v < min {
 			min = v
 		}
+		if v != 0 {
+			nonZero++
+		}
 	}
 
 	mean := sum / float64(len(vector))
+	variance := (sumSquares / float64(len(vector))) - (mean * mean)
+	stdDev := math.Sqrt(variance)
+	sparsity := float64(nonZero) / float64(len(vector))
+	magnitude := math.Sqrt(sumSquares)
 
-	// Find dominant dimensions (values significantly above mean)
-	dominantDims := []int{}
-	threshold := mean + (max-mean)*0.3 // 30% above mean
+	// Analyze vector characteristics and map to product features
+
+	// Magnitude-based features (product category insights)
+	if magnitude > 0.8 {
+		features = append(features, "premium products", "high-quality items", "detailed specifications")
+	} else if magnitude > 0.4 {
+		features = append(features, "standard products", "popular items", "mainstream brands")
+	} else {
+		features = append(features, "basic products", "essential items", "budget-friendly")
+	}
+
+	// Distribution-based features (product diversity insights)
+	if stdDev > 0.15 {
+		features = append(features, "diverse features", "multi-category", "varied specifications")
+	} else if stdDev > 0.08 {
+		features = append(features, "balanced features", "consistent quality", "similar specifications")
+	} else {
+		features = append(features, "focused features", "specialized products", "niche category")
+	}
+
+	// Sparsity-based features (product complexity insights)
+	if sparsity > 0.9 {
+		features = append(features, "feature-rich products", "comprehensive specifications", "detailed descriptions")
+	} else if sparsity > 0.7 {
+		features = append(features, "well-described products", "good specifications", "clear features")
+	} else if sparsity > 0.3 {
+		features = append(features, "basic specifications", "simple products", "essential features")
+	} else {
+		features = append(features, "minimal specifications", "simple items", "basic descriptions")
+	}
+
+	// Peak analysis for dominant features
+	threshold := mean + (2 * stdDev)
+	dominantDims := make([]int, 0)
 
 	for i, v := range vector {
 		if v > threshold {
@@ -927,76 +1024,76 @@ func (bkb *BedrockKnowledgeBaseService) analyzeVectorForFeatures(ctx context.Con
 		}
 	}
 
-	// Create analysis prompt for Claude
-	prompt := fmt.Sprintf(`
-Analyze this product embedding vector to extract semantic features:
-
-Vector Statistics:
-- Dimensions: %d
-- Mean: %.4f
-- Max: %.4f
-- Min: %.4f
-- Dominant dimensions: %v
-
-Based on these vector characteristics, extract likely product features and categories.
-Return a JSON array of semantic features like: ["electronics", "portable", "wireless", "premium"]
-
-Focus on:
-1. Product categories that might have these embedding patterns
-2. Key features suggested by the dominant dimensions
-3. Quality indicators from the vector distribution
-
-Limit to 5-8 most relevant features.
-`, len(vector), mean, max, min, dominantDims)
-
-	response, err := bkb.callNovaForAnalysis(ctx, prompt)
-	if err != nil {
-		// Fallback to statistical analysis
-		return bkb.extractFeaturesFromVectorStats(mean, max, min, dominantDims), nil
-	}
-
-	// Parse Claude's response
-	var features []string
-
-	// Extract JSON array from response
-	jsonStart := strings.Index(response, "[")
-	jsonEnd := strings.LastIndex(response, "]")
-
-	if jsonStart != -1 && jsonEnd != -1 {
-		jsonText := response[jsonStart : jsonEnd+1]
-		if err := json.Unmarshal([]byte(jsonText), &features); err == nil {
-			return features, nil
+	// Map dominant dimensions to product characteristics
+	if len(dominantDims) > len(vector)/5 {
+		features = append(features, "multi-faceted products", "comprehensive features", "well-rounded items")
+	} else if len(dominantDims) > 0 {
+		// Add dimension-specific features based on position patterns
+		dimRatio := float64(len(dominantDims)) / float64(len(vector))
+		if dimRatio > 0.1 {
+			features = append(features, "distinctive features", "unique characteristics", "special attributes")
+		} else {
+			features = append(features, "focused characteristics", "specific features", "targeted attributes")
 		}
 	}
 
-	// Fallback if parsing fails
-	return bkb.extractFeaturesFromVectorStats(mean, max, min, dominantDims), nil
-}
-
-// extractFeaturesFromVectorStats extracts features from vector statistics as fallback
-func (bkb *BedrockKnowledgeBaseService) extractFeaturesFromVectorStats(mean, max, min float64, dominantDims []int) []string {
-	features := []string{}
-
-	// Basic feature extraction based on vector statistics
-	if mean > 0.5 {
-		features = append(features, "high_engagement")
-	}
-	if max > 0.8 {
-		features = append(features, "premium")
-	}
-	if len(dominantDims) > len(dominantDims)/4 {
-		features = append(features, "feature_rich")
-	}
-	if min > 0.1 {
-		features = append(features, "well_balanced")
+	// Range analysis for product variety
+	vectorRange := max - min
+	if vectorRange > 0.6 {
+		features = append(features, "wide product range", "diverse options", "varied selection")
+	} else if vectorRange > 0.3 {
+		features = append(features, "moderate variety", "balanced selection", "curated options")
+	} else {
+		features = append(features, "focused selection", "specialized range", "consistent options")
 	}
 
-	// Add generic features if nothing specific found
+	// Semantic clustering for enhanced matching
+	if mean > 0.3 && magnitude > 0.5 {
+		features = append(features, "popular similar products", "trending items", "recommended choices")
+	}
+
+	if stdDev < 0.05 && sparsity > 0.8 {
+		features = append(features, "consistent quality products", "reliable brands", "trusted items")
+	}
+
+	// Advanced Nova analysis for deeper insights (if available)
+	if len(features) > 0 {
+		// Create a prompt for Nova analysis
+		topFeatureCount := 3
+		if len(features) < 3 {
+			topFeatureCount = len(features)
+		}
+		featurePrompt := fmt.Sprintf(
+			"Based on vector analysis showing magnitude=%.3f, variance=%.3f, sparsity=%.3f, analyze product characteristics and suggest 2-3 key product features for search. Current features: %s",
+			magnitude, variance, sparsity, strings.Join(features[:topFeatureCount], ", "))
+
+		novaFeatures, err := bkb.callNovaForAnalysis(ctx, featurePrompt)
+		if err == nil && novaFeatures != "" {
+			// Parse Nova response and add refined features
+			novaLines := strings.Split(novaFeatures, "\n")
+			for _, line := range novaLines {
+				line = strings.TrimSpace(line)
+				if len(line) > 5 && len(line) < 50 { // Reasonable feature length
+					features = append(features, line)
+				}
+			}
+		}
+	}
+
+	// Ensure we have meaningful features
 	if len(features) == 0 {
-		features = []string{"similar_products", "related_items"}
+		features = []string{"similar products", "related items", "comparable options"}
 	}
 
-	return features
+	// Remove duplicates and limit feature count
+	features = bkb.deduplicateFeatures(features)
+
+	// Limit to top 8 features to avoid overly complex queries
+	if len(features) > 8 {
+		features = features[:8]
+	}
+
+	return features, nil
 }
 
 // buildVectorBasedQuery builds a search query based on extracted vector features
@@ -1028,58 +1125,183 @@ func (bkb *BedrockKnowledgeBaseService) buildVectorBasedQuery(semanticFeatures [
 	return queryBuilder.String()
 }
 
-// extractVectorClusters extracts semantic clusters from vector analysis
+// extractVectorClusters extracts semantic clusters from vector analysis with improved logic
 func (bkb *BedrockKnowledgeBaseService) extractVectorClusters(vector []float64) []string {
 	clusters := []string{}
 
-	// Simple clustering based on vector characteristics
-	var sum float64
+	if len(vector) == 0 {
+		return []string{"empty_vector"}
+	}
+
+	// Statistical analysis of vector
+	var sum, sumSquares float64
+	var max, min float64 = vector[0], vector[0]
+	nonZero := 0
+
 	for _, v := range vector {
 		sum += v
-	}
-	mean := sum / float64(len(vector))
-
-	// Cluster based on mean value ranges
-	if mean > 0.7 {
-		clusters = append(clusters, "high_similarity")
-	} else if mean > 0.4 {
-		clusters = append(clusters, "moderate_similarity")
-	} else {
-		clusters = append(clusters, "low_similarity")
-	}
-
-	// Check for sparsity
-	nonZero := 0
-	for _, v := range vector {
+		sumSquares += v * v
+		if v > max {
+			max = v
+		}
+		if v < min {
+			min = v
+		}
 		if v != 0 {
 			nonZero++
 		}
 	}
-	sparsity := float64(nonZero) / float64(len(vector))
 
-	if sparsity > 0.8 {
-		clusters = append(clusters, "dense_features")
-	} else if sparsity < 0.3 {
-		clusters = append(clusters, "sparse_features")
+	mean := sum / float64(len(vector))
+	variance := (sumSquares / float64(len(vector))) - (mean * mean)
+	stdDev := math.Sqrt(variance)
+	sparsity := float64(nonZero) / float64(len(vector))
+	magnitude := math.Sqrt(sumSquares)
+
+	// Analyze vector characteristics and map to product features
+
+	// Magnitude-based features (product category insights)
+	if magnitude > 0.8 {
+		clusters = append(clusters, "premium products", "high-quality items", "detailed specifications")
+	} else if magnitude > 0.4 {
+		clusters = append(clusters, "standard products", "popular items", "mainstream brands")
+	} else {
+		clusters = append(clusters, "basic products", "essential items", "budget-friendly")
+	}
+
+	// Distribution-based features (product diversity insights)
+	if stdDev > 0.15 {
+		clusters = append(clusters, "diverse features", "multi-category", "varied specifications")
+	} else if stdDev > 0.08 {
+		clusters = append(clusters, "balanced features", "consistent quality", "similar specifications")
+	} else {
+		clusters = append(clusters, "focused features", "specialized products", "niche category")
+	}
+
+	// Sparsity-based features (product complexity insights)
+	if sparsity > 0.9 {
+		clusters = append(clusters, "feature-rich products", "comprehensive specifications", "detailed descriptions")
+	} else if sparsity > 0.7 {
+		clusters = append(clusters, "well-described products", "good specifications", "clear features")
+	} else if sparsity > 0.3 {
+		clusters = append(clusters, "basic specifications", "simple products", "essential features")
+	} else {
+		clusters = append(clusters, "minimal specifications", "simple items", "basic descriptions")
+	}
+
+	// Peak analysis for dominant features
+	threshold := mean + (2 * stdDev)
+	dominantDims := make([]int, 0)
+
+	for i, v := range vector {
+		if v > threshold {
+			dominantDims = append(dominantDims, i)
+		}
+	}
+
+	// Map dominant dimensions to product characteristics
+	if len(dominantDims) > len(vector)/5 {
+		clusters = append(clusters, "multi-faceted products", "comprehensive features", "well-rounded items")
+	} else if len(dominantDims) > 0 {
+		// Add dimension-specific features based on position patterns
+		dimRatio := float64(len(dominantDims)) / float64(len(vector))
+		if dimRatio > 0.1 {
+			clusters = append(clusters, "distinctive features", "unique characteristics", "special attributes")
+		} else {
+			clusters = append(clusters, "focused characteristics", "specific features", "targeted attributes")
+		}
+	}
+
+	// Range analysis for product variety
+	vectorRange := max - min
+	if vectorRange > 0.6 {
+		clusters = append(clusters, "wide product range", "diverse options", "varied selection")
+	} else if vectorRange > 0.3 {
+		clusters = append(clusters, "moderate variety", "balanced selection", "curated options")
+	} else {
+		clusters = append(clusters, "focused selection", "specialized range", "consistent options")
+	}
+
+	// Semantic clustering for enhanced matching
+	if mean > 0.3 && magnitude > 0.5 {
+		clusters = append(clusters, "popular similar products", "trending items", "recommended choices")
+	}
+
+	if stdDev < 0.05 && sparsity > 0.8 {
+		clusters = append(clusters, "consistent quality products", "reliable brands", "trusted items")
+	}
+
+	// Additional clustering based on statistical patterns
+	if len(clusters) > 0 {
+		// Add contextual clusters based on existing analysis
+		if magnitude > 0.6 && stdDev > 0.1 {
+			clusters = append(clusters, "rich_content")
+		}
+		if sparsity > 0.8 && variance > 0.05 {
+			clusters = append(clusters, "detailed_features")
+		}
+	}
+
+	// Ensure we have meaningful features
+	if len(clusters) == 0 {
+		clusters = []string{"similar products", "related items", "comparable options"}
+	}
+
+	// Remove duplicates and limit feature count
+	clusters = bkb.deduplicateFeatures(clusters)
+
+	// Limit to top 8 features to avoid overly complex queries
+	if len(clusters) > 8 {
+		clusters = clusters[:8]
 	}
 
 	return clusters
 }
 
-// calculateVectorConfidence calculates confidence score for vector search results
+// calculateVectorConfidence calculates enhanced confidence score for vector search results
 func (bkb *BedrockKnowledgeBaseService) calculateVectorConfidence(vectorScore float64, featureCount int) float64 {
-	// Base confidence from vector similarity
-	baseConfidence := vectorScore
-
-	// Boost confidence based on number of matched features
-	featureBoost := float64(featureCount) * 0.05
-	if featureBoost > 0.2 {
-		featureBoost = 0.2 // Cap at 20% boost
+	// Validate input parameters
+	if vectorScore < 0 {
+		vectorScore = 0
+	}
+	if vectorScore > 1 {
+		vectorScore = 1
 	}
 
-	confidence := baseConfidence + featureBoost
+	// Base confidence from vector similarity (weighted more heavily)
+	baseConfidence := vectorScore * 0.7 // Give 70% weight to actual similarity score
 
-	// Normalize to 0-1 range
+	// Feature richness boost - more features generally indicate better matches
+	featureBoost := 0.0
+	if featureCount > 0 {
+		// Logarithmic scaling to prevent over-boosting
+		featureBoost = math.Log(float64(featureCount)+1) * 0.05
+		if featureBoost > 0.15 { // Cap at 15% boost
+			featureBoost = 0.15
+		}
+	}
+
+	// Score distribution analysis - penalize very low scores more heavily
+	distributionAdjustment := 0.0
+	if vectorScore < 0.1 {
+		// Heavily penalize extremely low scores
+		distributionAdjustment = -0.1
+	} else if vectorScore < 0.3 {
+		// Moderately penalize low scores
+		distributionAdjustment = -0.05
+	} else if vectorScore > 0.7 {
+		// Reward high scores
+		distributionAdjustment = 0.05
+	}
+
+	// Calculate final confidence
+	confidence := baseConfidence + featureBoost + distributionAdjustment
+
+	// Apply sigmoid transformation for smoother confidence curve
+	// This helps spread out the confidence values more naturally
+	confidence = 1.0 / (1.0 + math.Exp(-6*(confidence-0.5)))
+
+	// Normalize to 0-1 range with more aggressive normalization for low scores
 	if confidence > 1.0 {
 		confidence = 1.0
 	}
@@ -1087,11 +1309,144 @@ func (bkb *BedrockKnowledgeBaseService) calculateVectorConfidence(vectorScore fl
 		confidence = 0.0
 	}
 
+	// Apply minimum confidence threshold to avoid extremely low values
+	minConfidence := 0.1
+	if confidence < minConfidence {
+		confidence = minConfidence
+	}
+
 	return confidence
 }
 
-// convertKnowledgeBaseResultsToBedrockResults converts Bedrock Knowledge Base results to service.RAGSearchResult
-func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResults(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]service.RAGSearchResult, error) {
+// calculateVectorQualityBoost calculates quality boost based on vector clusters
+func (bkb *BedrockKnowledgeBaseService) calculateVectorQualityBoost(clusters []string, score float64) float64 {
+	boost := 0.0
+
+	// Apply boosts based on cluster characteristics
+	for _, cluster := range clusters {
+		switch cluster {
+		case "high_similarity":
+			boost += 0.05
+		case "moderate_similarity":
+			boost += 0.02
+		case "very_dense_features", "dense_features":
+			boost += 0.03
+		case "high_variance":
+			boost += 0.02 // High variance can indicate rich feature representation
+		case "multi_peaked", "focused_peaks":
+			boost += 0.02 // Peak patterns can indicate strong feature matches
+		case "wide_range":
+			boost += 0.01 // Wide range can indicate comprehensive features
+		}
+	}
+
+	// Scale boost based on base score - higher scores get proportionally more boost
+	if score > 0.5 {
+		boost *= 1.5
+	} else if score < 0.2 {
+		boost *= 0.5 // Reduce boost for very low scores
+	}
+
+	// Cap maximum boost
+	if boost > 0.1 {
+		boost = 0.1
+	}
+
+	return boost
+}
+
+// applyAdvancedReranking applies sophisticated reranking using multiple criteria
+func (bkb *BedrockKnowledgeBaseService) applyAdvancedReranking(results []service.RAGSearchResult, vector []float64, semanticFeatures []string) []service.RAGSearchResult {
+	if len(results) <= 1 {
+		return results
+	}
+
+	// Calculate advanced ranking scores
+	for i := range results {
+		originalScore := results[i].SimilarityScore
+
+		// Factor 1: Base similarity score (60% weight)
+		rankingScore := originalScore * 0.6
+
+		// Factor 2: Confidence score (25% weight)
+		rankingScore += results[i].ConfidenceScore * 0.25
+
+		// Factor 3: Feature richness (10% weight)
+		featureRichness := float64(len(results[i].MatchedCriteria)) / 10.0 // Normalize
+		if featureRichness > 1.0 {
+			featureRichness = 1.0
+		}
+		rankingScore += featureRichness * 0.1
+
+		// Factor 4: Semantic cluster quality (5% weight)
+		clusterQuality := bkb.calculateClusterQuality(results[i].SemanticClusters)
+		rankingScore += clusterQuality * 0.05
+
+		// Store the ranking score for sorting
+		results[i].DistanceScore = rankingScore // Use DistanceScore field to store ranking score
+	}
+
+	// Sort by ranking score
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].DistanceScore > results[j].DistanceScore
+	})
+
+	// Restore original distance scores after sorting
+	for i := range results {
+		results[i].DistanceScore = results[i].SimilarityScore
+	}
+
+	return results
+}
+
+// calculateClusterQuality evaluates the quality of semantic clusters
+func (bkb *BedrockKnowledgeBaseService) calculateClusterQuality(clusters []string) float64 {
+	if len(clusters) == 0 {
+		return 0.0
+	}
+
+	quality := 0.0
+	count := 0
+
+	for _, cluster := range clusters {
+		count++
+		switch cluster {
+		case "high_similarity":
+			quality += 1.0
+		case "moderate_similarity":
+			quality += 0.6
+		case "low_similarity":
+			quality += 0.2
+		case "very_dense_features":
+			quality += 0.9
+		case "dense_features":
+			quality += 0.7
+		case "moderate_features":
+			quality += 0.5
+		case "high_variance":
+			quality += 0.6
+		case "moderate_variance":
+			quality += 0.4
+		case "multi_peaked":
+			quality += 0.8
+		case "focused_peaks":
+			quality += 0.7
+		case "wide_range":
+			quality += 0.5
+		default:
+			quality += 0.3 // Default for unknown clusters
+		}
+	}
+
+	if count > 0 {
+		quality /= float64(count)
+	}
+
+	return quality
+}
+
+// convertKnowledgeBaseResultsToRAGResults converts Bedrock Knowledge Base results to service.RAGSearchResult
+func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToRAGResults(results []types.KnowledgeBaseRetrievalResult, searchMethod string) ([]service.RAGSearchResult, error) {
 	bedrockResults := make([]service.RAGSearchResult, 0, len(results))
 
 	for _, result := range results {
@@ -1128,27 +1483,31 @@ func (bkb *BedrockKnowledgeBaseService) convertKnowledgeBaseResultsToBedrockResu
 	return bedrockResults, nil
 }
 
-// rankBedrockResultsByScore ranks service.RAGSearchResult by their similarity scores
-func (bkb *BedrockKnowledgeBaseService) rankBedrockResultsByScore(results []service.RAGSearchResult) []service.RAGSearchResult {
-	// Sort results by similarity score in descending order
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].SimilarityScore > results[j].SimilarityScore
-	})
-
-	return results
-}
-
 // applyPostRetrievalFiltersToBedrockResults applies additional filters after retrieval
 func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResults(results []service.RAGSearchResult, filters map[string]interface{}) []service.RAGSearchResult {
+	if len(filters) == 0 {
+		return results
+	}
+
 	filtered := make([]service.RAGSearchResult, 0, len(results))
+	excludedCount := 0
 
 	for _, result := range results {
 		include := true
 
-		// Apply exclusion filter (exclude specific product ID)
-		if excludeID, ok := filters["exclude_id"].(string); ok {
+		// Apply exclusion filter (exclude specific product ID) - check multiple possible keys
+		excludeID := ""
+		if id, ok := filters["exclude_id"].(string); ok {
+			excludeID = id
+		} else if id, ok := filters["exclude_product_id"].(string); ok {
+			excludeID = id
+		}
+
+		if excludeID != "" {
 			if result.ProductID.String() == excludeID {
 				include = false
+				excludedCount++
+				log.Printf("Excluding target product ID %s from results", excludeID)
 			}
 		}
 
@@ -1165,6 +1524,10 @@ func (bkb *BedrockKnowledgeBaseService) applyPostRetrievalFiltersToBedrockResult
 		if include {
 			filtered = append(filtered, result)
 		}
+	}
+
+	if excludedCount > 0 {
+		log.Printf("Excluded %d products from search results", excludedCount)
 	}
 
 	return filtered
@@ -1303,4 +1666,19 @@ func (bkb *BedrockKnowledgeBaseService) applyDiversityAlgorithmForBedrock(result
 	}
 
 	return diversified
+}
+
+// deduplicateFeatures removes duplicate features from a list
+func (bkb *BedrockKnowledgeBaseService) deduplicateFeatures(features []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+
+	for _, feature := range features {
+		if !seen[feature] {
+			seen[feature] = true
+			result = append(result, feature)
+		}
+	}
+
+	return result
 }
