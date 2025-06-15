@@ -224,7 +224,7 @@ func (h *RecommendationHandler) GetCustomerProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, profile)
 }
 
-// GetSimilarProducts handles GET /api/v1/products/{product_id}/similar
+// GetSimilarProducts handles GET /api/v1/products/similar/{product_id}
 // @Summary Get products similar to a specific product
 // @Description Find products similar to the given product using content-based filtering
 // @Tags products
@@ -234,7 +234,7 @@ func (h *RecommendationHandler) GetCustomerProfile(c *gin.Context) {
 // @Success 200 {object} []dto.ProductRecommendation
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /api/v1/products/{product_id}/similar [get]
+// @Router /api/v1/products/similar/{product_id} [get]
 func (h *RecommendationHandler) GetSimilarProducts(c *gin.Context) {
 	productIDStr := c.Param("product_id")
 	productID, err := uuid.Parse(productIDStr)

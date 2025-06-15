@@ -291,24 +291,6 @@ func (r *RecommendationRepositoryV2) convertToProductRecommendationsV2(products 
 
 // ==== TODO: Below methods are placeholder implementations ====
 
-// GetProductsWithVectorSearch - TODO: Implement vector search functionality
-func (r *RecommendationRepositoryV2) GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
-	// TODO: Implement vector search with pgvector or similar
-	return nil, fmt.Errorf("vector search not implemented yet")
-}
-
-// GetProductsWithSemanticSearch - TODO: Implement semantic search functionality
-func (r *RecommendationRepositoryV2) GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
-	// TODO: Implement semantic search with embedding models
-	return nil, fmt.Errorf("semantic search not implemented yet")
-}
-
-// GetProductsWithHybridSearch - TODO: Implement hybrid search functionality
-func (r *RecommendationRepositoryV2) GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error) {
-	// TODO: Implement hybrid search combining semantic and vector approaches
-	return nil, fmt.Errorf("hybrid search not implemented yet")
-}
-
 // GetTrendingProductsV2 - TODO: Implement enhanced trending products analysis
 func (r *RecommendationRepositoryV2) GetTrendingProductsV2(ctx context.Context, categoryID *int, timeRange string, limit int) ([]dto.TrendingProductV2, error) {
 	// TODO: Implement advanced trending analysis with AI insights

@@ -354,7 +354,7 @@ func (h *RecommendationHandlerV2) GetSemanticSearch(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// GetVectorSimilarProducts handles GET /api/v2/products/{product_id}/vector-similar
+// GetVectorSimilarProducts handles GET /api/v2/recommendations/{product_id}/vector-similar
 // @Summary Get products similar to a specific product using vector search
 // @Description Find products similar to the given product using advanced vector similarity in knowledge base
 // @Tags vector-search
@@ -365,7 +365,7 @@ func (h *RecommendationHandlerV2) GetSemanticSearch(c *gin.Context) {
 // @Success 200 {object} dto.VectorSimilarityResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /api/v2/products/{product_id}/vector-similar [get]
+// @Router /api/v2/recommendations/{product_id}/vector-similar [get]
 func (h *RecommendationHandlerV2) GetVectorSimilarProducts(c *gin.Context) {
 	productIDStr := c.Param("product_id")
 	productID, err := uuid.Parse(productIDStr)

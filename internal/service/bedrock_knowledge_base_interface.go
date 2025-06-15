@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"ec-recommend/internal/dto"
 )
 
 // BedrockKnowledgeBaseInterface defines the interface for Amazon Bedrock Knowledge Base operations
@@ -18,6 +19,11 @@ type BedrockKnowledgeBaseInterface interface {
 
 	// GetSimilarDocuments finds similar documents based on vector similarity
 	GetSimilarDocuments(ctx context.Context, embedding []float64, limit int, filters map[string]interface{}) (*SimilarDocumentsResponse, error)
+
+	// Product search methods using Bedrock Knowledge Base
+	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
+	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
+	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
 }
 
 // BedrockKnowledgeBaseResponse represents the response from knowledge base query

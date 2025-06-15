@@ -17,11 +17,6 @@ type RecommendationRepositoryV2Interface interface {
 	GetProductsByIDs(ctx context.Context, productIDs []uuid.UUID) ([]dto.ProductRecommendationV2, error)
 	GetProductsByCategory(ctx context.Context, categoryID int, limit int) ([]dto.ProductRecommendationV2, error)
 
-	// Vector and semantic search methods
-	GetProductsWithVectorSearch(ctx context.Context, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
-	GetProductsWithSemanticSearch(ctx context.Context, query string, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
-	GetProductsWithHybridSearch(ctx context.Context, query string, vector []float64, limit int, filters map[string]interface{}) ([]dto.ProductRecommendationV2, error)
-
 	// Enhanced analytics and trending
 	GetTrendingProductsV2(ctx context.Context, categoryID *int, timeRange string, limit int) ([]dto.TrendingProductV2, error)
 	GetProductPerformanceMetrics(ctx context.Context, productIDs []uuid.UUID) (map[uuid.UUID]*dto.ProductPerformanceMetrics, error)

@@ -55,7 +55,7 @@ func SetupRouter(
 		products := v1.Group("/products")
 		{
 			products.GET("/trending", recommendationHandler.GetTrendingProducts)
-			products.GET("/:product_id/similar", recommendationHandler.GetSimilarProducts)
+			products.GET("/similar/:product_id", recommendationHandler.GetSimilarProducts)
 		}
 	}
 
@@ -68,7 +68,7 @@ func SetupRouter(
 			recommendations.GET("", recommendationHandlerV2.GetRecommendationsV2)
 			recommendations.POST("", recommendationHandlerV2.PostRecommendationsV2)
 			recommendations.GET("/semantic-search", recommendationHandlerV2.GetSemanticSearch)
-			recommendations.GET("/vector-similar", recommendationHandlerV2.GetVectorSimilarProducts)
+			recommendations.GET("/vector-similar/:product_id", recommendationHandlerV2.GetVectorSimilarProducts)
 			recommendations.GET("/knowledge-based", recommendationHandlerV2.GetKnowledgeBasedRecommendations)
 			recommendations.GET("/:recommendation_id/explanation", recommendationHandlerV2.GetRecommendationExplanation)
 		}

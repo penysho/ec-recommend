@@ -186,8 +186,8 @@ func (rs *RecommendationServiceV2) SemanticSearch(ctx context.Context, req *dto.
 		filters["price_max"] = *req.PriceRangeMax
 	}
 
-	// Perform semantic search
-	results, err := rs.repo.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
+	// Perform semantic search using Bedrock Knowledge Base
+	results, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.Query, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
@@ -244,7 +244,7 @@ func (rs *RecommendationServiceV2) GetVectorSimilarProducts(ctx context.Context,
 	filters := make(map[string]interface{})
 	filters["exclude_id"] = req.ProductID.String()
 
-	similarProducts, err := rs.repo.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	similarProducts, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
@@ -442,8 +442,8 @@ func (rs *RecommendationServiceV2) generateSemanticRecommendations(ctx context.C
 	// Build personalized filters based on customer profile
 	filters := rs.buildPersonalizedFilters(profile, req)
 
-	// Perform semantic search
-	results, err := rs.repo.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
+	// Perform semantic search using Bedrock Knowledge Base
+	results, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, req.QueryText, req.Limit*2, filters)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to perform semantic search: %w", err)
 	}
@@ -480,8 +480,8 @@ func (rs *RecommendationServiceV2) generateVectorRecommendations(ctx context.Con
 	filters := rs.buildPersonalizedFilters(profile, req)
 	filters["exclude_id"] = req.ProductID.String()
 
-	// Perform vector search
-	results, err := rs.repo.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
+	// Perform vector search using Bedrock Knowledge Base
+	results, err := rs.bedrockKB.GetProductsWithVectorSearch(ctx, embedding, req.Limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
 	}
@@ -829,7 +829,7 @@ func (rs *RecommendationServiceV2) extractRecommendationsFromKB(ctx context.Cont
 		searchQuery := rs.extractKeyTermsFromText(kbResponse.Results[0].Content)
 		if searchQuery != "" {
 			filters := rs.buildPersonalizedFilters(profile, &dto.RecommendationRequestV2{})
-			semanticResults, err := rs.repo.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
+			semanticResults, err := rs.bedrockKB.GetProductsWithSemanticSearch(ctx, searchQuery, limit, filters)
 			if err == nil {
 				// Enhance semantic results with KB reasoning
 				for _, product := range semanticResults {
