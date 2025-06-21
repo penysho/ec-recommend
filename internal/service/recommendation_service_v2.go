@@ -691,14 +691,14 @@ Please provide a JSON response with the following structure:
 func (rs *RecommendationServiceV2) buildPersonalizedFilters(profile *dto.CustomerProfile, req *dto.RecommendationRequestV2) map[string]interface{} {
 	filters := make(map[string]interface{})
 
-	// Apply category filters
+	// Apply category filters - enhanced with multiple categories support
 	if req.CategoryID != nil {
 		filters["category_id"] = *req.CategoryID
 	} else if len(profile.PreferredCategories) > 0 {
 		filters["category_ids"] = profile.PreferredCategories
 	}
 
-	// Apply price range filters
+	// Apply price range filters with enhanced logic
 	if req.PriceRangeMin != nil {
 		filters["price_min"] = *req.PriceRangeMin
 	} else if profile.PriceRangeMin != nil {
@@ -711,12 +711,150 @@ func (rs *RecommendationServiceV2) buildPersonalizedFilters(profile *dto.Custome
 		filters["price_max"] = *profile.PriceRangeMax
 	}
 
-	// Apply preferred brands
+	// Apply preferred brands filter
 	if len(profile.PreferredBrands) > 0 {
 		filters["preferred_brands"] = profile.PreferredBrands
 	}
 
+	// Enhanced metadata filters based on customer profile and CSV batch metadata
+	rs.applyEnhancedMetadataFilters(filters, profile, req)
+
 	return filters
+}
+
+// applyEnhancedMetadataFilters applies advanced metadata filtering based on CSV batch metadata structure
+func (rs *RecommendationServiceV2) applyEnhancedMetadataFilters(filters map[string]interface{}, profile *dto.CustomerProfile, req *dto.RecommendationRequestV2) {
+	// Rating-based filtering for quality-conscious customers
+	if profile.IsPremium || profile.OrderCount > 5 {
+		filters["rating_min"] = 4.0      // Premium customers prefer high-rated products
+		filters["rating_count_min"] = 10 // Ensure sufficient review volume
+	} else {
+		filters["rating_min"] = 3.0 // Standard minimum rating
+	}
+
+	// Stock status filtering - only show available products
+	filters["stock_status"] = []string{"in_stock", "limited_stock"}
+	filters["is_active"] = true
+
+	// Popularity-based filtering based on customer engagement level
+	if profile.OrderCount > 10 {
+		// High-engagement customers might prefer trending or niche products
+		filters["popularity_score_min"] = 0 // Allow all popularity levels
+	} else {
+		// New customers prefer popular, well-established products
+		filters["popularity_score_min"] = 50
+	}
+
+	// Price-based filtering with smart defaults based on customer behavior
+	if profile.TotalSpent > 1000 && profile.OrderCount > 3 {
+		// High-value customers - adjust price expectations
+		avgOrderValue := profile.TotalSpent / float64(profile.OrderCount)
+		if _, exists := filters["price_min"]; !exists {
+			filters["price_min"] = avgOrderValue * 0.5 // 50% of avg order value as minimum
+		}
+		if _, exists := filters["price_max"]; !exists {
+			filters["price_max"] = avgOrderValue * 2.0 // 200% of avg order value as maximum
+		}
+	}
+
+	// Tag-based filtering using customer lifestyle and preferences
+	if len(profile.LifestyleTags) > 0 {
+		filters["lifestyle_tags"] = profile.LifestyleTags
+	}
+
+	// Seasonal filtering
+	seasonalTags := rs.getCurrentSeasonalTags()
+	if len(seasonalTags) > 0 {
+		filters["seasonal_boost"] = seasonalTags
+	}
+
+	// Exclude recently purchased categories if customer seeks diversity
+	if req.ExcludeOwned && len(profile.PurchaseHistory) > 0 {
+		recentCategoryIDs := rs.extractRecentCategoryIDs(profile.PurchaseHistory, 30) // Last 30 days
+		if len(recentCategoryIDs) > 0 {
+			filters["exclude_category_ids"] = recentCategoryIDs
+		}
+	}
+
+	// Add context-specific filters
+	rs.applyContextSpecificFilters(filters, req.ContextType, profile)
+}
+
+// applyContextSpecificFilters applies filters based on the recommendation context
+func (rs *RecommendationServiceV2) applyContextSpecificFilters(filters map[string]interface{}, contextType string, profile *dto.CustomerProfile) {
+	switch contextType {
+	case "homepage":
+		// Homepage: Focus on popular, high-rated products
+		filters["homepage_boost"] = true
+		filters["rating_min"] = 4.2
+		filters["popularity_score_min"] = 100
+	case "category_page":
+		// Category page: Allow more variety within the category
+		filters["rating_min"] = 3.5
+		filters["include_new_arrivals"] = true
+	case "product_detail":
+		// Product detail page: Focus on similar and complementary products
+		filters["similarity_boost"] = true
+		filters["complementary_products"] = true
+	case "cart":
+		// Cart page: Suggest complementary and frequently bought together items
+		filters["frequently_bought_together"] = true
+		filters["complementary_products"] = true
+		filters["price_max"] = 200 // Limit add-on suggestions
+	case "checkout":
+		// Checkout: Last-minute add-ons and accessories
+		filters["quick_add_suitable"] = true
+		filters["price_max"] = 100
+		filters["category_types"] = []string{"accessories", "add-ons", "consumables"}
+	case "post_purchase":
+		// Post-purchase: Complementary items and replenishment
+		filters["replenishment_suitable"] = true
+		filters["complementary_products"] = true
+	case "email_campaign":
+		// Email campaigns: Personalized picks based on engagement
+		if profile.IsPremium {
+			filters["exclusive_items"] = true
+		}
+		filters["personalization_boost"] = true
+	}
+}
+
+// getCurrentSeasonalTags returns relevant seasonal tags for filtering
+func (rs *RecommendationServiceV2) getCurrentSeasonalTags() []string {
+	now := time.Now()
+	month := now.Month()
+
+	switch {
+	case month >= 12 || month <= 2:
+		return []string{"winter", "holiday", "gift", "warm", "indoor"}
+	case month >= 3 && month <= 5:
+		return []string{"spring", "outdoor", "fresh", "renewal", "gardening"}
+	case month >= 6 && month <= 8:
+		return []string{"summer", "vacation", "outdoor", "travel", "cooling"}
+	case month >= 9 && month <= 11:
+		return []string{"autumn", "back-to-school", "cozy", "preparation", "harvest"}
+	default:
+		return []string{}
+	}
+}
+
+// extractRecentCategoryIDs extracts category IDs from recent purchase history
+func (rs *RecommendationServiceV2) extractRecentCategoryIDs(purchaseHistory []dto.PurchaseItem, days int) []int {
+	cutoffDate := time.Now().AddDate(0, 0, -days)
+	categoryMap := make(map[int]bool)
+
+	for _, purchase := range purchaseHistory {
+		if purchase.PurchasedAt.After(cutoffDate) {
+			categoryMap[purchase.CategoryID] = true
+		}
+	}
+
+	categoryIDs := make([]int, 0, len(categoryMap))
+	for categoryID := range categoryMap {
+		categoryIDs = append(categoryIDs, categoryID)
+	}
+
+	return categoryIDs
 }
 
 func (rs *RecommendationServiceV2) generateSemanticInsights(results []dto.ProductRecommendationV2, understanding *dto.QueryUnderstanding) *dto.SemanticInsights {
