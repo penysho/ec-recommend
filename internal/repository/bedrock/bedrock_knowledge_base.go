@@ -682,6 +682,17 @@ func parseBoolSafe(value interface{}) bool {
 func (bkb *BedrockKnowledgeBaseService) buildKnowledgeBaseMetadataFilters(filters map[string]interface{}) types.RetrievalFilter {
 	var filterConditions []types.RetrievalFilter
 
+	// Exclude specific product ID using NotEquals filter
+	if excludeID, ok := filters["exclude_id"]; ok {
+		excludeFilter := &types.RetrievalFilterMemberNotEquals{
+			Value: types.FilterAttribute{
+				Key:   aws.String("product_id"),
+				Value: document.NewLazyDocument(fmt.Sprintf("%v", excludeID)),
+			},
+		}
+		filterConditions = append(filterConditions, excludeFilter)
+	}
+
 	// Category-based filtering using RetrievalFilterMemberEquals
 	if categoryID, ok := filters["category_id"]; ok {
 		categoryFilter := &types.RetrievalFilterMemberEquals{
@@ -707,6 +718,23 @@ func (bkb *BedrockKnowledgeBaseService) buildKnowledgeBaseMetadataFilters(filter
 				},
 			}
 			filterConditions = append(filterConditions, categoryFilter)
+		}
+	}
+
+	// Exclude specific category IDs using NotIn filter
+	if excludeCategoryIDs, ok := filters["exclude_category_ids"]; ok {
+		if ids, ok := excludeCategoryIDs.([]int); ok && len(ids) > 0 {
+			categoryStrings := make([]interface{}, len(ids))
+			for i, id := range ids {
+				categoryStrings[i] = fmt.Sprintf("%d", id)
+			}
+			excludeCategoryFilter := &types.RetrievalFilterMemberNotIn{
+				Value: types.FilterAttribute{
+					Key:   aws.String("category_id"),
+					Value: document.NewLazyDocument(categoryStrings),
+				},
+			}
+			filterConditions = append(filterConditions, excludeCategoryFilter)
 		}
 	}
 
