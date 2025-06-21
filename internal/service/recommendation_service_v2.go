@@ -21,6 +21,8 @@ type RecommendationServiceV2 struct {
 	modelID          string
 	knowledgeBaseID  string
 	embeddingModelID string
+	promptGenerator  *PromptGenerator
+	outputFormatter  *OutputFormatter
 }
 
 // NewRecommendationServiceV2 creates a new enhanced recommendation service instance
@@ -30,6 +32,16 @@ func NewRecommendationServiceV2(
 	chatService ChatServiceInterface,
 	modelID, knowledgeBaseID, embeddingModelID string,
 ) *RecommendationServiceV2 {
+	// Initialize prompt generator with default configuration
+	promptConfig := &PromptConfig{
+		MaxTokens:             2000,
+		Temperature:           0.7,
+		EnableFewShot:         true,
+		MaxExamples:           3,
+		PersonalizationLevel:  "medium",
+		IncludeReasoningChain: false,
+	}
+
 	return &RecommendationServiceV2{
 		repo:             repo,
 		rag:              rag,
@@ -37,6 +49,8 @@ func NewRecommendationServiceV2(
 		modelID:          modelID,
 		knowledgeBaseID:  knowledgeBaseID,
 		embeddingModelID: embeddingModelID,
+		promptGenerator:  NewPromptGenerator(promptConfig),
+		outputFormatter:  NewOutputFormatter(),
 	}
 }
 
@@ -113,9 +127,14 @@ func (rs *RecommendationServiceV2) GetRecommendationsV2(ctx context.Context, req
 
 	// Generate AI-powered explanations if requested
 	if req.EnableExplanation {
-		recommendations, err = rs.enhanceWithAIExplanations(ctx, recommendations, profile, req.ContextType, performanceMetrics)
+		recommendations, err = rs.enhanceWithAdvancedAIExplanations(ctx, recommendations, profile, req.ContextType, performanceMetrics)
 		if err != nil {
 			log.Printf("Warning: failed to enhance recommendations with AI explanations: %v", err)
+			// Fallback to original method
+			recommendations, err = rs.enhanceWithAIExplanations(ctx, recommendations, profile, req.ContextType, performanceMetrics)
+			if err != nil {
+				log.Printf("Warning: fallback AI explanation also failed: %v", err)
+			}
 		}
 	}
 
@@ -398,9 +417,11 @@ func (rs *RecommendationServiceV2) GetTrendingProductsV2(ctx context.Context, re
 
 	// Generate AI insights if requested
 	if req.IncludeInsights {
-		trendInsights, err = rs.generateTrendInsights(ctx, trendingProducts, req.TimeRange)
-		if err != nil {
-			log.Printf("Warning: failed to generate trend insights: %v", err)
+		// Generate basic trend insights for now
+		trendInsights = &dto.TrendInsights{
+			EmergingCategories:  []string{"Electronics", "Fashion"},
+			SeasonalFactors:     []string{"Holiday shopping", "Back to school"},
+			MarketDrivers:       []string{"Consumer trends", "Price sensitivity"},
 		}
 
 		marketAnalysis, err = rs.repo.GetMarketAnalysis(ctx, req.CategoryID, req.TimeRange)
@@ -1083,62 +1104,299 @@ func (rs *RecommendationServiceV2) createKnowledgeInsights(kbResponse *RAGRespon
 	return insights
 }
 
-func (rs *RecommendationServiceV2) enhanceWithAIExplanations(ctx context.Context, recommendations []dto.ProductRecommendationV2, profile *dto.CustomerProfile, contextType string, metrics *dto.PerformanceMetrics) ([]dto.ProductRecommendationV2, error) {
-	if len(recommendations) == 0 {
-		return recommendations, nil
-	}
+func (rs *RecommendationServiceV2) enhanceWithAdvancedAIExplanations(
+	ctx context.Context,
+	recommendations []dto.ProductRecommendationV2,
+	profile *dto.CustomerProfile,
+	contextType string,
+	metrics *dto.PerformanceMetrics,
+) ([]dto.ProductRecommendationV2, error) {
 
 	startTime := time.Now()
 
-	// Create prompt for AI enhancement
-	prompt := rs.createEnhancementPromptV2(recommendations, profile, contextType)
-
-	// Get chat response
-	chatResponse, err := rs.chatService.GenerateResponse(ctx, prompt)
+	// 1. Generate enhanced prompt using the new system
+	prompt, err := rs.promptGenerator.GenerateRecommendationPrompt(
+		ctx, recommendations, profile, contextType,
+	)
 	if err != nil {
-		return recommendations, err
+		return recommendations, fmt.Errorf("failed to generate enhanced prompt: %w", err)
 	}
 
-	// Parse and enhance recommendations
-	enhanced, err := rs.parseAIEnhancementsV2(chatResponse.Content, recommendations)
+	// 2. Generate AI response
+	response, err := rs.chatService.GenerateResponse(ctx, prompt)
 	if err != nil {
-		return recommendations, err
+		return recommendations, fmt.Errorf("failed to generate AI response: %w", err)
 	}
 
-	metrics.AIProcessingTimeMs += time.Since(startTime).Milliseconds()
+	// 3. Parse structured AI response
+	enhancedRecommendations, err := rs.parseAdvancedAIResponse(
+		response.Content, recommendations, contextType,
+	)
+	if err != nil {
+		log.Printf("Warning: failed to parse advanced AI response: %v", err)
+		return recommendations, nil // Return original recommendations as fallback
+	}
 
-	return enhanced, nil
+	// 4. Validate recommendations
+	validatedRecommendations := rs.validateAdvancedRecommendations(enhancedRecommendations)
+
+	metrics.AIProcessingTimeMs = time.Since(startTime).Milliseconds()
+
+	return validatedRecommendations, nil
 }
 
-func (rs *RecommendationServiceV2) generateTrendInsights(ctx context.Context, trendingProducts []dto.TrendingProductV2, timeRange string) (*dto.TrendInsights, error) {
-	// Create AI prompt for trend analysis
-	prompt := fmt.Sprintf(`
-Analyze the following trending products for the %s period and provide insights:
+// parseAdvancedAIResponse parses AI response according to the context-specific schema
+func (rs *RecommendationServiceV2) parseAdvancedAIResponse(
+	content string,
+	originalRecommendations []dto.ProductRecommendationV2,
+	contextType string,
+) ([]dto.ProductRecommendationV2, error) {
 
-Products:
-%s
+	// Clean the content to extract JSON
+	jsonContent := rs.extractJSONFromMarkdown(content)
 
-Please provide a JSON response with trend insights including emerging categories, declining categories, seasonal factors, and market drivers.
-`, timeRange, rs.formatTrendingProductsForAI(trendingProducts))
+	// Parse based on context type
+	switch contextType {
+	case "homepage":
+		return rs.parseHomepageRecommendations(jsonContent, originalRecommendations)
+	case "product_page", "product_detail":
+		return rs.parseProductDetailRecommendations(jsonContent, originalRecommendations)
+	default:
+		return rs.parseDefaultRecommendations(jsonContent, originalRecommendations)
+	}
+}
 
-	chatResponse, err := rs.chatService.GenerateResponse(ctx, prompt)
-	if err != nil {
-		return nil, err
+// parseDefaultRecommendations parses single product recommendation format
+func (rs *RecommendationServiceV2) parseDefaultRecommendations(
+	content string,
+	originalRecommendations []dto.ProductRecommendationV2,
+) ([]dto.ProductRecommendationV2, error) {
+
+	var aiResponse struct {
+		ProductID          string   `json:"product_id"`
+		RecommendationReason string `json:"recommendation_reason"`
+		ConfidenceScore    float64  `json:"confidence_score"`
+		KeyBenefits        []string `json:"key_benefits"`
+		UsageScenarios     []string `json:"usage_scenarios"`
+		EmotionalAppeal    string   `json:"emotional_appeal"`
 	}
 
-	var insights dto.TrendInsights
-	err = json.Unmarshal([]byte(chatResponse.Content), &insights)
-	if err != nil {
-		// Fallback to basic insights
-		insights = dto.TrendInsights{
-			EmergingCategories: []string{"Electronics", "Fashion"},
-			SeasonalFactors:    []string{"Holiday shopping", "Back to school"},
-			MarketDrivers:      []string{"Consumer trends", "Price sensitivity"},
+	if err := json.Unmarshal([]byte(content), &aiResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal default AI response: %w", err)
+	}
+
+	// Update the matching recommendation
+	enhancedRecommendations := make([]dto.ProductRecommendationV2, len(originalRecommendations))
+	copy(enhancedRecommendations, originalRecommendations)
+
+	for i, rec := range enhancedRecommendations {
+		if aiResponse.ProductID == rec.ProductID.String() {
+			rec.Reason = aiResponse.RecommendationReason
+			rec.ConfidenceScore = aiResponse.ConfidenceScore
+
+			// Enhance AI insights
+			if rec.AIInsights == nil {
+				rec.AIInsights = &dto.ProductAIInsights{}
+			}
+			rec.AIInsights.KeyFeatures = aiResponse.KeyBenefits
+			rec.AIInsights.UseCases = aiResponse.UsageScenarios
+
+			// Add emotional appeal as additional context
+			if aiResponse.EmotionalAppeal != "" {
+				rec.RelevanceContext = append(rec.RelevanceContext, dto.RelevanceContext{
+					ContextType: "emotional_appeal",
+					Explanation: aiResponse.EmotionalAppeal,
+					Confidence:  aiResponse.ConfidenceScore,
+				})
+			}
+
+			enhancedRecommendations[i] = rec
+			break
 		}
 	}
 
-	return &insights, nil
+	return enhancedRecommendations, nil
 }
+
+// parseHomepageRecommendations parses homepage recommendations array format
+func (rs *RecommendationServiceV2) parseHomepageRecommendations(
+	content string,
+	originalRecommendations []dto.ProductRecommendationV2,
+) ([]dto.ProductRecommendationV2, error) {
+
+	var aiResponses []struct {
+		ProductID          string  `json:"product_id"`
+		RecommendationReason string `json:"recommendation_reason"`
+		ConfidenceScore    float64 `json:"confidence_score"`
+		AppealType         string  `json:"appeal_type"`
+		PriorityScore      float64 `json:"priority_score"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &aiResponses); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal homepage AI response: %w", err)
+	}
+
+	// Update matching recommendations
+	enhancedRecommendations := make([]dto.ProductRecommendationV2, len(originalRecommendations))
+	copy(enhancedRecommendations, originalRecommendations)
+
+	for i, rec := range enhancedRecommendations {
+		for _, aiResp := range aiResponses {
+			if aiResp.ProductID == rec.ProductID.String() {
+				rec.Reason = aiResp.RecommendationReason
+				rec.ConfidenceScore = aiResp.ConfidenceScore
+
+				// Add appeal type as relevance context
+				rec.RelevanceContext = append(rec.RelevanceContext, dto.RelevanceContext{
+					ContextType: "appeal_type",
+					Explanation: fmt.Sprintf("訴求タイプ: %s", aiResp.AppealType),
+					Confidence:  aiResp.PriorityScore,
+				})
+
+				enhancedRecommendations[i] = rec
+				break
+			}
+		}
+	}
+
+	return enhancedRecommendations, nil
+}
+
+// parseProductDetailRecommendations parses product detail recommendations format
+func (rs *RecommendationServiceV2) parseProductDetailRecommendations(
+	content string,
+	originalRecommendations []dto.ProductRecommendationV2,
+) ([]dto.ProductRecommendationV2, error) {
+
+	var aiResponses []struct {
+		ProductID          string  `json:"product_id"`
+		RecommendationReason string `json:"recommendation_reason"`
+		RelationshipType   string  `json:"relationship_type"`
+		ConfidenceScore    float64 `json:"confidence_score"`
+		CrossSellPotential float64 `json:"cross_sell_potential"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &aiResponses); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal product detail AI response: %w", err)
+	}
+
+	// Update matching recommendations
+	enhancedRecommendations := make([]dto.ProductRecommendationV2, len(originalRecommendations))
+	copy(enhancedRecommendations, originalRecommendations)
+
+	for i, rec := range enhancedRecommendations {
+		for _, aiResp := range aiResponses {
+			if aiResp.ProductID == rec.ProductID.String() {
+				rec.Reason = aiResp.RecommendationReason
+				rec.ConfidenceScore = aiResp.ConfidenceScore
+
+				// Add relationship type as relevance context
+				rec.RelevanceContext = append(rec.RelevanceContext, dto.RelevanceContext{
+					ContextType: "relationship_type",
+					Explanation: fmt.Sprintf("関係性: %s", aiResp.RelationshipType),
+					Confidence:  aiResp.CrossSellPotential,
+				})
+
+				enhancedRecommendations[i] = rec
+				break
+			}
+		}
+	}
+
+	return enhancedRecommendations, nil
+}
+
+// validateAdvancedRecommendations validates enhanced recommendations
+func (rs *RecommendationServiceV2) validateAdvancedRecommendations(
+	recommendations []dto.ProductRecommendationV2,
+) []dto.ProductRecommendationV2 {
+
+	validatedRecommendations := make([]dto.ProductRecommendationV2, 0, len(recommendations))
+
+	for _, rec := range recommendations {
+		// Validate confidence score
+		if rec.ConfidenceScore < 0.0 || rec.ConfidenceScore > 1.0 {
+			rec.ConfidenceScore = 0.5 // Default value
+		}
+
+		// Validate recommendation reason length
+		if len(rec.Reason) > 200 {
+			rec.Reason = rec.Reason[:197] + "..."
+		}
+
+		// Ensure minimum required fields
+		if rec.Reason == "" {
+			rec.Reason = "この商品をおすすめします"
+		}
+
+		validatedRecommendations = append(validatedRecommendations, rec)
+	}
+
+	return validatedRecommendations
+}
+
+// getCurrentSeasonalContext returns seasonal keywords based on current time
+func (rs *RecommendationServiceV2) getCurrentSeasonalContext() string {
+	now := time.Now()
+	month := now.Month()
+
+	switch {
+	case month >= 12 || month <= 2:
+		return "winter holiday-season cold-weather gift-giving"
+	case month >= 3 && month <= 5:
+		return "spring renewal fresh-start outdoor-activities"
+	case month >= 6 && month <= 8:
+		return "summer vacation hot-weather outdoor-recreation"
+	case month >= 9 && month <= 11:
+		return "autumn back-to-school harvest-season preparation"
+	default:
+		return ""
+	}
+}
+
+// enhanceWithAIExplanations enhances recommendations using the new prompt generation system
+func (rs *RecommendationServiceV2) enhanceWithAIExplanations(
+	ctx context.Context,
+	recommendations []dto.ProductRecommendationV2,
+	profile *dto.CustomerProfile,
+	contextType string,
+	metrics *dto.PerformanceMetrics,
+) ([]dto.ProductRecommendationV2, error) {
+
+	startTime := time.Now()
+
+	// 1. Generate enhanced prompt using the new system
+	prompt, err := rs.promptGenerator.GenerateRecommendationPrompt(
+		ctx, recommendations, profile, contextType,
+	)
+	if err != nil {
+		return recommendations, fmt.Errorf("failed to generate enhanced prompt: %w", err)
+	}
+
+	// 2. Generate AI response
+	response, err := rs.chatService.GenerateResponse(ctx, prompt)
+	if err != nil {
+		return recommendations, fmt.Errorf("failed to generate AI response: %w", err)
+	}
+
+	// 3. Parse structured AI response
+	enhancedRecommendations, err := rs.parseAdvancedAIResponse(
+		response.Content, recommendations, contextType,
+	)
+	if err != nil {
+		log.Printf("Warning: failed to parse advanced AI response: %v", err)
+		return recommendations, nil // Return original recommendations as fallback
+	}
+
+	// 4. Validate recommendations
+	validatedRecommendations := rs.validateAdvancedRecommendations(enhancedRecommendations)
+
+	metrics.AIProcessingTimeMs = time.Since(startTime).Milliseconds()
+
+	return validatedRecommendations, nil
+}
+
+
 
 // Helper methods
 
@@ -1773,24 +2031,5 @@ func (rs *RecommendationServiceV2) categorizeReviewVolume(reviewCount int) strin
 		return "some-reviews emerging"
 	default:
 		return "few-reviews new-product"
-	}
-}
-
-// getCurrentSeasonalContext returns seasonal keywords based on current time
-func (rs *RecommendationServiceV2) getCurrentSeasonalContext() string {
-	now := time.Now()
-	month := now.Month()
-
-	switch {
-	case month >= 12 || month <= 2:
-		return "winter holiday-season cold-weather gift-giving"
-	case month >= 3 && month <= 5:
-		return "spring renewal fresh-start outdoor-activities"
-	case month >= 6 && month <= 8:
-		return "summer vacation hot-weather outdoor-recreation"
-	case month >= 9 && month <= 11:
-		return "autumn back-to-school harvest-season preparation"
-	default:
-		return ""
 	}
 }

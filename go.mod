@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.45.0
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.30.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.80.1
+	github.com/aws/smithy-go v1.22.3
 	github.com/friendsofgo/errors v0.9.2
 	github.com/gin-gonic/gin v1.10.1
 	github.com/google/uuid v1.3.0
@@ -33,7 +34,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.25.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.30.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.20 // indirect
-	github.com/aws/smithy-go v1.22.3 // indirect
 	github.com/bytedance/sonic v1.13.3 // indirect
 	github.com/bytedance/sonic/loader v0.2.4 // indirect
 	github.com/cloudwego/base64x v0.1.5 // indirect
