@@ -80,14 +80,18 @@ func main() {
 	// Initialize V2 services (Enhanced RAG-based)
 	recommendationServiceV2 := service.NewRecommendationServiceV2(recommendationRepoV2, bedrockRepoV2, bedrockRepo, cfg.BedrockModelID, cfg.KnowledgeBaseID, cfg.EmbeddingModelID)
 
+	// Initialize inventory service
+	inventoryService := service.NewInventoryService(db)
+
 	// Initialize handlers
 	chatHandler := handler.NewChatHandler(bedrockRepo)
 	healthHandler := handler.NewHealthHandler()
 	recommendationHandler := handler.NewRecommendationHandler(recommendationService)
 	recommendationHandlerV2 := handler.NewRecommendationHandlerV2(recommendationServiceV2)
+	inventoryHandler := handler.NewInventoryHandler(inventoryService)
 
 	// Setup router
-	routerEngine := router.SetupRouter(chatHandler, healthHandler, recommendationHandler, recommendationHandlerV2)
+	routerEngine := router.SetupRouter(chatHandler, healthHandler, recommendationHandler, recommendationHandlerV2, inventoryHandler)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -113,7 +117,13 @@ func main() {
 		log.Println("Available endpoints:")
 		log.Println("  V1 API: /api/v1/recommendations")
 		log.Println("  V2 API: /api/v2/recommendations (Enhanced RAG-based)")
+		log.Println("  Inventory API: /api/v1/inventory (NEW - with authorization)")
 		log.Println("  Health: /health")
+		log.Println("")
+		log.Println("Authentication tokens for testing:")
+		log.Println("  Admin: Bearer admin-token-123")
+		log.Println("  Employee: Bearer employee-token-456")
+		log.Println("  Customer: Bearer customer-token-789")
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
